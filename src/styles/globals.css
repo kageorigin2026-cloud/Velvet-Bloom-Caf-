@@ -1,0 +1,73 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: #080808;
+  --foreground: #F6EFE7;
+  --card: #171717;
+  --card-foreground: #F6EFE7;
+  --border: #242424;
+  --rose-gold: #C99A8A;
+  --champagne: #D8B58A;
+  --warm-cream: #F6EFE7;
+  --muted: #A8A29E;
+  --success: #6FAF82;
+  --warning: #D6A34A;
+  --error: #C96B6B;
+}
+
+body {
+  background-color: #080808;
+  color: #F6EFE7;
+  overflow-x: hidden;
+  font-family: var(--font-inter), system-ui, -apple-system, sans-serif;
+}
+
+/* Custom Luxury Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #080808;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #242424;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #C99A8A;
+}
+
+/* Glassmorphism utilities */
+.glass-panel {
+  background: rgba(23, 23, 23, 0.75);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(201, 154, 138, 0.15);
+}
+
+.glass-card {
+  background: rgba(36, 36, 36, 0.6);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(216, 181, 138, 0.12);
+}
+
+.glass-header {
+  background: rgba(8, 8, 8, 0.85);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid rgba(201, 154, 138, 0.15);
+}
+
+@layer utilities {
+  .safe-area-pb {
+    padding-bottom: env(safe-area-inset-bottom, 1rem);
+  }
+}
+
