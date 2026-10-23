@@ -25,6 +25,7 @@ describe("Supabase Integration & Architecture Verification", () => {
     expect(files).toContain("20261022000002_v2_seed_data.sql");
     expect(files).toContain("20261022000003_v2_stored_procedures.sql");
     expect(files).toContain("20261022000004_v2_storage_setup.sql");
+    expect(files).toContain("20261023000000_v2_stored_procedure_updates.sql");
 
     // Check that stored procedures migration defines the key atomic functions
     const spContent = fs.readFileSync(path.join(migrationsDir, "20261022000003_v2_stored_procedures.sql"), "utf-8");
