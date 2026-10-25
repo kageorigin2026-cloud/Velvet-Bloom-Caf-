@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import Link from "next/link";
 import QRCode from "qrcode";
 import { CafeTable, CafeSettings } from "@/types/database.types";
@@ -33,7 +33,18 @@ export function QrStandeeBatchView({ tables, settings, baseUrl }: QrStandeeBatch
   const [printSingleId, setPrintSingleId] = useState<string | null>(null);
 
   // Normalize baseUrl to eliminate trailing slash
-  const cleanBaseUrl = baseUrl.replace(/\/+$/, "");
+  // Normalize baseUrl and enforce production origin safety check
+  const cleanBaseUrl = useMemo(() => {
+    let resolved = (baseUrl || "").trim().replace(/\/+$/, "");
+    if (typeof window !== "undefined") {
+      const hostname = window.location.hostname.toLowerCase();
+      const isProdHost = hostname.includes("vercel.app") || hostname.includes("velvet-bloom");
+      if (isProdHost && (resolved.includes("localhost") || resolved.includes("127.0.0.1") || !resolved)) {
+        resolved = window.location.origin;
+      }
+    }
+    return resolved || "https://velvet-bloom-caf.vercel.app";
+  }, [baseUrl]);
 
   // Generate sharp, high-contrast QR codes for each table record
   useEffect(() => {

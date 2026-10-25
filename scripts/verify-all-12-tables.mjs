@@ -77,3 +77,4 @@ async function verifyAll12Tables() {
 }
 
 verifyAll12Tables().catch(console.error);
+

@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDatabaseAdapter, getDefaultTenantId } from "@/lib/adapter";
 import { createSessionToken } from "@/lib/auth/staff-auth";
+import { getServiceRoleClient } from "@/lib/server/supabase-service";
 import { z } from "zod";
 
 const SetupOwnerSchema = z.object({
   fullName: z.string().trim().min(2, "Full name must be at least 2 characters").max(100),
   email: z.string().trim().email("Please provide a valid email address").max(120),
   pin: z.string().trim().regex(/^\d{4,6}$/, "Owner PIN must be between 4 and 6 numeric digits"),
+  authUserId: z.string().uuid("Invalid auth user ID").optional().nullable(),
 });
 
 export async function POST(req: NextRequest) {
@@ -19,7 +21,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: errorMsg }, { status: 400 });
     }
 
-    const { fullName, email, pin } = parseResult.data;
+    const { fullName, email, pin, authUserId } = parseResult.data;
     const adapter = getDatabaseAdapter();
     const tenantId = getDefaultTenantId();
 
@@ -35,10 +37,30 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 2. Provision initial owner via atomic, bcrypt-salted procedure
-    const newOwner = await adapter.provisionInitialOwner(tenantId, fullName, email, pin);
+    // 2. Validate auth user id against Supabase Auth if provided
+    let validatedAuthUserId: string | null = null;
+    if (authUserId) {
+      try {
+        const serviceClient = getServiceRoleClient();
+        const { data: userRecord, error: authUserErr } = await serviceClient.auth.admin.getUserById(authUserId);
+        if (!authUserErr && userRecord?.user) {
+          validatedAuthUserId = userRecord.user.id;
+        }
+      } catch {
+        validatedAuthUserId = null;
+      }
+    }
 
-    // 3. Issue staff session token
+    // 3. Provision initial owner via atomic, bcrypt-salted procedure executed as service_role
+    const newOwner = await adapter.provisionInitialOwner(
+      tenantId,
+      fullName,
+      email,
+      pin,
+      validatedAuthUserId
+    );
+
+    // 4. Issue staff session token
     const session = createSessionToken(newOwner);
 
     const response = NextResponse.json(session, { status: 201 });
@@ -52,9 +74,8 @@ export async function POST(req: NextRequest) {
 
     return response;
   } catch (err: any) {
-    return NextResponse.json(
-      { error: err.message || "Failed to initialize owner account" },
-      { status: 400 }
-    );
+    const message = err.message || "Failed to initialize owner account";
+    const status = message.includes("already") || message.includes("configured") ? 409 : 400;
+    return NextResponse.json({ error: message }, { status });
   }
 }

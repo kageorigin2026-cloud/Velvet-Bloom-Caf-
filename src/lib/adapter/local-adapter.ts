@@ -946,7 +946,8 @@ class LocalDatabaseAdapterImpl implements DatabaseAdapter {
     tenantId: string,
     fullName: string,
     email: string,
-    pin: string
+    pin: string,
+    authUserId?: string | null
   ): Promise<User> {
     const existing = this.users.find((u) => u.tenant_id === tenantId && u.role === "OWNER");
     if (existing) {
@@ -955,6 +956,7 @@ class LocalDatabaseAdapterImpl implements DatabaseAdapter {
     const newUser: User = {
       id: `u-owner-${Date.now()}`,
       tenant_id: tenantId,
+      auth_user_id: authUserId || undefined,
       full_name: fullName.trim(),
       email: email.trim().toLowerCase(),
       role: "OWNER",

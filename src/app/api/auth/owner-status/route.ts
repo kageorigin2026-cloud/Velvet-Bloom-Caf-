@@ -11,11 +11,18 @@ export async function GET() {
       adapter.getSettings(tenantId).catch(() => null),
     ]);
 
-    return NextResponse.json({
-      hasOwner,
-      cafeName: settings?.cafe_name || "Velvet Bloom Café",
-      tenantId,
-    });
+    return NextResponse.json(
+      {
+        hasOwner,
+        cafeName: settings?.cafe_name || "Velvet Bloom Café",
+        tenantId,
+      },
+      {
+        headers: {
+          "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0",
+        },
+      }
+    );
   } catch (err: any) {
     return NextResponse.json(
       { error: err.message || "Failed to inspect owner status" },

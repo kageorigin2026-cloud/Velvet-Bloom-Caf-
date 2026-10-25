@@ -4,6 +4,7 @@ import { StaffHeader } from "@/components/layout/StaffHeader";
 import { NotificationProvider } from "@/lib/audio/notification-context";
 import { NotificationBanner } from "@/components/ui/NotificationBanner";
 import { QrStandeeBatchView } from "./QrStandeeBatchView";
+import { resolveServerBaseUrl } from "@/lib/server/url-resolver";
 
 export const metadata = {
   title: "QR Standee Batch Generator | Velvet Bloom Café Admin",
@@ -26,7 +27,7 @@ export default async function AdminQrCodesPage() {
     return numA - numB;
   });
 
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://velvet-bloom-caf.vercel.app";
+  const baseUrl = resolveServerBaseUrl();
 
   return (
     <NotificationProvider role="ADMIN">

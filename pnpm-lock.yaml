@@ -81,6 +81,9 @@ importers:
       jsdom:
         specifier: ^26.0.0
         version: 26.1.0
+      jsqr:
+        specifier: ^1.4.0
+        version: 1.4.0
       postcss:
         specifier: ^8.5.2
         version: 8.5.31
@@ -1332,6 +1335,9 @@ packages:
     peerDependenciesMeta:
       canvas:
         optional: true
+
+  jsqr@1.4.0:
+    resolution: {integrity: sha512-dxLob7q65Xg2DvstYkRpkYtmKm2sPJ9oFhrhmudT1dZvNFFTlroai3AWSpLey/w5vMcLBXRgOJsbXpdN9HzU/A==}
 
   jwa@2.0.1:
     resolution: {integrity: sha512-hRF04fqJIP8Abbkq5NKGN0Bbr3JxlQ+qhZufXVr0DvujKy93ZCbXZMHDL4EOtodSbCWxOqR8MS1tXA5hwqCXDg==}
@@ -2946,6 +2952,8 @@ snapshots:
       - bufferutil
       - supports-color
       - utf-8-validate
+
+  jsqr@1.4.0: {}
 
   jwa@2.0.1:
     dependencies:

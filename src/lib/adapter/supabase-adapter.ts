@@ -38,6 +38,7 @@ import { isValidUUID } from "@/lib/utils";
 import { calculateOrderPricing, calculateEqualSplit } from "@/lib/pricing";
 import { z } from "zod";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import { getServiceRoleClient } from "@/lib/server/supabase-service";
 
 export class SupabaseDatabaseAdapter implements DatabaseAdapter {
   readonly adapterName = "supabase" as const;
@@ -1219,14 +1220,15 @@ export class SupabaseDatabaseAdapter implements DatabaseAdapter {
     tenantId: string,
     fullName: string,
     email: string,
-    pin: string
+    pin: string,
+    authUserId?: string | null
   ): Promise<User> {
-    const client = this.getClient();
+    const client = getServiceRoleClient();
     const { data, error } = await client.rpc("provision_initial_owner", {
       p_tenant_id: tenantId,
       p_full_name: fullName.trim(),
       p_email: email.trim().toLowerCase(),
-      p_auth_user_id: null,
+      p_auth_user_id: authUserId || null,
       p_pin: pin.trim(),
     });
 
