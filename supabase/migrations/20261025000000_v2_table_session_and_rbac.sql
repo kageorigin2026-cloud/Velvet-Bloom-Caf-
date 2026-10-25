@@ -6,7 +6,7 @@
 -- ============================================================
 
 -- Ensure pgcrypto extension is active for salted bcrypt hashing
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+CREATE EXTENSION IF NOT EXISTS "pgcrypto" WITH SCHEMA extensions;
 
 -- ------------------------------------------------------------
 -- 1. Schema & Constraints: Ensure UserRole includes MANAGER
@@ -64,7 +64,7 @@ END $$;
 -- Safely rehash any legacy unhashed credentials without locking out staff
 -- ------------------------------------------------------------
 UPDATE public.users
-SET pin_code = crypt(trim(pin_code), gen_salt('bf', 8)),
+SET pin_code = extensions.crypt(trim(pin_code), extensions.gen_salt('bf', 8)),
     updated_at = NOW()
 WHERE pin_code IS NOT NULL
   AND pin_code NOT LIKE '$2%'
@@ -145,7 +145,7 @@ BEGIN
   WHERE tenant_id = p_tenant_id
     AND is_active = TRUE
     AND pin_code LIKE '$2%'
-    AND crypt(v_clean_pin, pin_code) = pin_code;
+    AND extensions.crypt(v_clean_pin, pin_code) = pin_code;
 
   IF NOT FOUND THEN
     -- Record failed attempt
@@ -388,7 +388,7 @@ BEGIN
 
   -- 5. Update with bcrypt salted hash
   UPDATE public.users
-  SET pin_code = crypt(trim(p_new_pin), gen_salt('bf', 8)),
+  SET pin_code = extensions.crypt(trim(p_new_pin), extensions.gen_salt('bf', 8)),
       updated_at = NOW()
   WHERE id = p_user_id AND tenant_id = v_caller_tenant;
 
@@ -467,7 +467,7 @@ BEGIN
     COALESCE(NULLIF(trim(p_full_name), ''), 'Alexander Vance (Owner)'),
     lower(trim(p_email)),
     'OWNER',
-    crypt(trim(p_pin), gen_salt('bf', 8)),
+    extensions.crypt(trim(p_pin), extensions.gen_salt('bf', 8)),
     TRUE
   )
   RETURNING * INTO v_new_owner;

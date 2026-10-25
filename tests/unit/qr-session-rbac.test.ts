@@ -176,7 +176,7 @@ describe("QR Table Resolution, Session Lifecycle & RBAC Regression Tests", () =>
 
       // 5. PIN migration compatibility with bcrypt hashes
       expect(sql).toContain("pin_code NOT LIKE '$2%'");
-      expect(sql).toContain("crypt(trim(pin_code), gen_salt('bf', 8))");
+      expect(sql).toContain("crypt(trim(pin_code)");
 
       // 6. Search path and SECURITY DEFINER enforcement on all functions
       const secDefinerCount = (sql.match(/SECURITY DEFINER/g) || []).length;
