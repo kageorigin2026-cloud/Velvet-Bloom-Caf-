@@ -105,6 +105,18 @@ export function parseSessionToken(token: string): { userId: string; tenantId: st
   }
 }
 
+export function extractStaffToken(req: { cookies: { get: (name: string) => { value: string } | undefined }; headers: { get: (name: string) => string | null } }): string | null {
+  const cookieToken = req.cookies.get(SESSION_COOKIE_NAME)?.value;
+  if (cookieToken) return cookieToken;
+
+  const authHeader = req.headers.get("authorization");
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    return authHeader.slice(7).trim();
+  }
+
+  return null;
+}
+
 /**
  * Server-side authorization guard.
  * Validates staff session token, tenant isolation, and role permissions.

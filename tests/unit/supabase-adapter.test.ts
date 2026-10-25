@@ -26,6 +26,13 @@ describe("Supabase Integration & Architecture Verification", () => {
     expect(files).toContain("20261022000003_v2_stored_procedures.sql");
     expect(files).toContain("20261022000004_v2_storage_setup.sql");
     expect(files).toContain("20261023000000_v2_stored_procedure_updates.sql");
+    expect(files).toContain("20261025000000_v2_table_session_and_rbac.sql");
+
+    // Check that forward migration defines table session atomicity and staff auth
+    const forwardContent = fs.readFileSync(path.join(migrationsDir, "20261025000000_v2_table_session_and_rbac.sql"), "utf-8");
+    expect(forwardContent).toContain("get_or_create_tenant_session");
+    expect(forwardContent).toContain("authenticate_tenant_staff");
+    expect(forwardContent).toContain("update_tenant_table_status");
 
     // Check that stored procedures migration defines the key atomic functions
     const spContent = fs.readFileSync(path.join(migrationsDir, "20261022000003_v2_stored_procedures.sql"), "utf-8");

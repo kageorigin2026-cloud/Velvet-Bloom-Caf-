@@ -176,11 +176,22 @@ export function ServiceBillingView({
   useSupabaseRealtime({ table: "bills", onEvent: fetchStaffData });
   useSupabaseRealtime({ table: "service_requests", onEvent: fetchStaffData });
 
-  // Live polling for staff updates (fallback and reconciliation)
+  // Live polling for staff updates (reconciliation fallback when Realtime is active; immediate refresh on window focus)
   useEffect(() => {
     fetchStaffData();
-    const interval = setInterval(fetchStaffData, 3500);
-    return () => clearInterval(interval);
+    const interval = setInterval(fetchStaffData, 12000);
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        fetchStaffData();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
   }, [fetchStaffData]);
 
   // Mark order served

@@ -123,11 +123,22 @@ export function ChefDisplayView({ initialOrders }: ChefDisplayViewProps) {
     },
   });
 
-  // Regular polling interval as fallback and reconciliation
+  // Reconciliation polling interval (10s fallback when Realtime is active; immediate refresh on window focus)
   useEffect(() => {
     fetchKitchenOrders();
-    const interval = setInterval(fetchKitchenOrders, 3000);
-    return () => clearInterval(interval);
+    const interval = setInterval(fetchKitchenOrders, 10000);
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        fetchKitchenOrders();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
   }, [fetchKitchenOrders]);
 
   const handleUpdateStatus = async (orderId: string, newStatus: OrderStatus) => {

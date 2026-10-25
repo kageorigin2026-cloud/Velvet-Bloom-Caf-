@@ -23,8 +23,13 @@ export default async function CartPage({ params }: PageProps) {
     return <SessionClosedView table={table} token={token} />;
   }
 
-  const session = await adapter.getOrCreateSession(tenantId, table.id);
-  const settings = await adapter.getSettings(tenantId);
+  // Optimize prefetching: Reuse active session first, only creating if none exists
+  const [activeSession, settings] = await Promise.all([
+    adapter.getActiveSession(tenantId, table.id),
+    adapter.getSettings(tenantId),
+  ]);
+
+  const session = activeSession || (await adapter.getOrCreateSession(tenantId, table.id));
 
   return (
     <div className="min-h-screen bg-[#080808] text-[#F6EFE7] p-4">

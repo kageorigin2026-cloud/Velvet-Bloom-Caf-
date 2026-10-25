@@ -48,13 +48,10 @@ export default async function HomePage() {
       <header className="border-b border-[#242424]/80 px-4 py-4 sm:px-6">
         <div className="max-w-5xl mx-auto flex items-center justify-between">
           <CafeLogo size="md" showTagline={false} showPoweredBy={false} href="/" />
-          <Link
-            href="/track"
-            className="text-xs text-[#D8B58A] hover:text-[#F6EFE7] transition-colors flex items-center gap-1.5 font-medium border border-[#D8B58A]/30 px-3 py-1.5 rounded-full hover:border-[#D8B58A]"
-          >
-            <Clock className="w-3.5 h-3.5" />
-            <span>Track Live Order</span>
-          </Link>
+          <div className="flex items-center gap-2 text-xs text-[#A8A29E]/80">
+            <span className="w-2 h-2 rounded-full bg-[#6FAF82] animate-pulse" />
+            <span>Dining Room Active</span>
+          </div>
         </div>
       </header>
 

@@ -1152,3 +1152,5 @@ export const localDbAdapter = globalForAdapter.localDbAdapterInstance || new Loc
 if (process.env.NODE_ENV !== "production") {
   globalForAdapter.localDbAdapterInstance = localDbAdapter;
 }
+
+export { LocalDatabaseAdapterImpl as LocalDatabaseAdapter };

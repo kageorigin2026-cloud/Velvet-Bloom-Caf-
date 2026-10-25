@@ -1,12 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDatabaseAdapter, getDefaultTenantId } from "@/lib/adapter";
 import { ServiceRequestStatus } from "@/types/database.types";
+import { extractStaffToken, verifyStaffRole } from "@/lib/auth/staff-auth";
 
 export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const tenantId = getDefaultTenantId();
+    const token = extractStaffToken(req);
+    const auth = verifyStaffRole(token, ["OWNER", "ADMIN", "MANAGER", "WAITER", "STAFF"], tenantId);
+
+    if (!auth.authorized) {
+      return NextResponse.json(
+        { error: auth.error || "Staff permissions required to update service requests" },
+        { status: 403 }
+      );
+    }
+
     const { id } = await params;
     const body = await req.json();
 
@@ -16,7 +28,6 @@ export async function PATCH(
     }
 
     const adapter = getDatabaseAdapter();
-    const tenantId = getDefaultTenantId();
 
     const updated = await adapter.updateServiceRequestStatus(tenantId, id, status);
     return NextResponse.json(updated);

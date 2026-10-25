@@ -25,10 +25,13 @@ export default async function TablePage({ params }: PageProps) {
     return <SessionClosedView table={table} token={token} />;
   }
 
-  const session = await adapter.getOrCreateSession(tenantId, table.id);
-  const categories = await adapter.getCategories(tenantId);
-  const menuItems = await adapter.getMenuItems(tenantId);
-  const settings = await adapter.getSettings(tenantId);
+  // Parallelize session creation, menu loading, and cafe settings for fast response times
+  const [session, categories, menuItems, settings] = await Promise.all([
+    adapter.getOrCreateSession(tenantId, table.id),
+    adapter.getCategories(tenantId),
+    adapter.getMenuItems(tenantId),
+    adapter.getSettings(tenantId),
+  ]);
 
   return (
     <div className="min-h-screen bg-[#080808] pb-24 text-[#F6EFE7]">

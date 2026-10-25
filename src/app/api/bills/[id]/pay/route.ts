@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDatabaseAdapter, getDefaultTenantId } from "@/lib/adapter";
 import { RecordPaymentSchema } from "@/lib/validation/schemas";
+import { extractStaffToken, verifyStaffRole } from "@/lib/auth/staff-auth";
 
 export async function POST(
   req: NextRequest,
@@ -19,8 +20,21 @@ export async function POST(
       );
     }
 
-    const adapter = getDatabaseAdapter();
     const tenantId = getDefaultTenantId();
+
+    // If recorded by staff terminal, verify staff role
+    const token = extractStaffToken(req);
+    if (token) {
+      const auth = verifyStaffRole(token, ["OWNER", "ADMIN", "MANAGER", "CASHIER", "STAFF"], tenantId);
+      if (!auth.authorized) {
+        return NextResponse.json(
+          { error: auth.error || "Staff permissions required to record cashier settlements" },
+          { status: 403 }
+        );
+      }
+    }
+
+    const adapter = getDatabaseAdapter();
 
     const payment = await adapter.recordPayment(tenantId, parseResult.data);
     const updatedBill = await adapter.getBillById(tenantId, id);

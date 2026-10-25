@@ -1,4 +1,4 @@
-export type UserRole = 'OWNER' | 'ADMIN' | 'CHEF' | 'STAFF' | 'WAITER' | 'CASHIER' | 'CUSTOMER';
+export type UserRole = 'OWNER' | 'ADMIN' | 'MANAGER' | 'CHEF' | 'STAFF' | 'WAITER' | 'CASHIER' | 'CUSTOMER';
 
 export type TableStatus = 'AVAILABLE' | 'OCCUPIED' | 'BILL_REQUESTED' | 'PAYMENT_PENDING' | 'PAID' | 'CLEANING';
 

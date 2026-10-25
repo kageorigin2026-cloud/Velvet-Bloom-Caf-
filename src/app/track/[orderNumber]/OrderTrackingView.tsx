@@ -157,9 +157,25 @@ export function OrderTrackingView({ initialOrder, initialBill }: OrderTrackingVi
   });
 
   useEffect(() => {
-    const interval = setInterval(refreshOrder, 3000);
-    return () => clearInterval(interval);
-  }, [refreshOrder]);
+    // If order is settled or cancelled, stop polling
+    if (order.status === "COMPLETED" || order.status === "CANCELLED" || bill?.status === "PAID") {
+      return;
+    }
+
+    const interval = setInterval(refreshOrder, 10000);
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        refreshOrder();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [refreshOrder, order.status, bill?.status]);
 
   const getStepIndex = (status: string) => {
     switch (status) {

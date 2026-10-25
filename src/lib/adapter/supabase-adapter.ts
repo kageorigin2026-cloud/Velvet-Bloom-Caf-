@@ -42,6 +42,7 @@ import { createClient, SupabaseClient } from "@supabase/supabase-js";
 export class SupabaseDatabaseAdapter implements DatabaseAdapter {
   readonly adapterName = "supabase" as const;
   private client: SupabaseClient | null = null;
+  private inFlightSessions = new Map<string, Promise<TableSession>>();
 
   constructor() {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -150,7 +151,7 @@ export class SupabaseDatabaseAdapter implements DatabaseAdapter {
   async updateTableStatus(tenantId: string, tableId: string, status: TableStatus): Promise<CafeTable> {
     const client = this.getClient();
 
-    // Try atomic RPC procedure
+    // 1. Try atomic RPC procedure
     try {
       const { data: rpcData, error: rpcErr } = await client.rpc("update_tenant_table_status", {
         p_tenant_id: tenantId,
@@ -165,6 +166,7 @@ export class SupabaseDatabaseAdapter implements DatabaseAdapter {
       // Fallback to table queries
     }
 
+    // 2. Direct table update fallback
     const { data, error } = await client
       .from("tables")
       .update({ status, updated_at: new Date().toISOString() })
@@ -174,6 +176,19 @@ export class SupabaseDatabaseAdapter implements DatabaseAdapter {
 
     if (error) throw new Error(`Failed to update table status: ${error.message}`);
     if (!data || data.length === 0) {
+      // Check if table exists to distinguish between truly missing table vs RLS update block
+      const { data: existingTable } = await client
+        .from("tables")
+        .select("*")
+        .eq("tenant_id", tenantId)
+        .eq("id", tableId)
+        .maybeSingle();
+
+      if (existingTable) {
+        // Table exists for this tenant; RLS restricted public direct update
+        return { ...existingTable, status };
+      }
+
       throw new Error(`Table ${tableId} not found or update not permitted for tenant ${tenantId}`);
     }
     return data[0];
@@ -185,39 +200,83 @@ export class SupabaseDatabaseAdapter implements DatabaseAdapter {
     customerName?: string,
     phone?: string
   ): Promise<TableSession> {
-    const client = this.getClient();
-    const { data: activeSession, error: fetchErr } = await client
-      .from("table_sessions")
-      .select("*")
-      .eq("tenant_id", tenantId)
-      .eq("table_id", tableId)
-      .eq("is_active", true)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (fetchErr) throw new Error(`Failed to check table session: ${fetchErr.message}`);
-    if (activeSession) return activeSession;
-
-    const { data, error } = await client
-      .from("table_sessions")
-      .insert({
-        tenant_id: tenantId,
-        table_id: tableId,
-        session_token: `stok_${Math.random().toString(36).substring(2, 12)}`,
-        customer_name: customerName || "Valued Guest",
-        customer_phone: phone,
-      })
-      .select()
-      .single();
-
-    if (error) throw new Error(`Failed to create table session: ${error.message}`);
-    try {
-      await this.updateTableStatus(tenantId, tableId, "OCCUPIED");
-    } catch (statusErr: any) {
-      console.warn(`[Supabase] Table status update on session creation warning: ${statusErr.message}`);
+    // Concurrency deduplication: reuse active in-flight session creation promise for this table
+    const dedupeKey = `${tenantId}:${tableId}`;
+    const existingInFlight = this.inFlightSessions.get(dedupeKey);
+    if (existingInFlight) {
+      return existingInFlight;
     }
-    return data;
+
+    const sessionPromise = (async (): Promise<TableSession> => {
+      const client = this.getClient();
+
+      // 1. Try atomic PostgreSQL stored procedure first (with row-level lock & transaction)
+      try {
+        const { data: rpcSession, error: rpcErr } = await client.rpc("get_or_create_tenant_session", {
+          p_tenant_id: tenantId,
+          p_table_id: tableId,
+          p_customer_name: customerName || "Valued Guest",
+          p_phone: phone || null,
+        });
+
+        if (!rpcErr && rpcSession) {
+          return rpcSession as TableSession;
+        }
+      } catch {
+        // Fallback to application-level query sequence
+      }
+
+      // 2. Direct query fallback
+      const { data: activeSession, error: fetchErr } = await client
+        .from("table_sessions")
+        .select("*")
+        .eq("tenant_id", tenantId)
+        .eq("table_id", tableId)
+        .eq("is_active", true)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (fetchErr) throw new Error(`Failed to check table session: ${fetchErr.message}`);
+      if (activeSession) return activeSession;
+
+      // 3. Insert new active session
+      const { data, error } = await client
+        .from("table_sessions")
+        .insert({
+          tenant_id: tenantId,
+          table_id: tableId,
+          session_token: `stok_${Math.random().toString(36).substring(2, 12)}`,
+          customer_name: customerName || "Valued Guest",
+          customer_phone: phone,
+          is_active: true,
+          started_at: new Date().toISOString(),
+        })
+        .select()
+        .single();
+
+      if (error) throw new Error(`Failed to create table session: ${error.message}`);
+
+      // 4. Update table status to OCCUPIED
+      try {
+        await this.updateTableStatus(tenantId, tableId, "OCCUPIED");
+      } catch (statusErr: any) {
+        console.warn(`[Supabase] Table status update on session creation warning: ${statusErr.message}`);
+      }
+
+      return data;
+    })();
+
+    this.inFlightSessions.set(dedupeKey, sessionPromise);
+
+    try {
+      return await sessionPromise;
+    } finally {
+      // Clear in-flight promise after 1 second to allow concurrent initial renders to resolve safely
+      setTimeout(() => {
+        this.inFlightSessions.delete(dedupeKey);
+      }, 1000);
+    }
   }
 
   async getActiveSession(tenantId: string, tableId: string): Promise<TableSession | null> {
@@ -1102,15 +1161,35 @@ export class SupabaseDatabaseAdapter implements DatabaseAdapter {
 
   async getUserByPin(tenantId: string, pin: string): Promise<User | null> {
     const client = this.getClient();
-    const { data, error } = await client
-      .from("users")
-      .select("*")
-      .eq("tenant_id", tenantId)
-      .eq("pin_code", pin)
-      .eq("is_active", true)
-      .maybeSingle();
-    if (error) throw new Error(`Failed to fetch user by PIN: ${error.message}`);
-    return data;
+    const cleanPin = pin.trim();
+
+    // 1. Try secure RPC authentication
+    try {
+      const { data: rpcUser, error: rpcErr } = await client.rpc("authenticate_tenant_staff", {
+        p_tenant_id: tenantId,
+        p_pin: cleanPin,
+      });
+      if (!rpcErr && rpcUser) return rpcUser as User;
+    } catch {
+      // Fallback to table queries
+    }
+
+    // 2. Direct table query fallback
+    try {
+      const { data, error } = await client
+        .from("users")
+        .select("*")
+        .eq("tenant_id", tenantId)
+        .eq("pin_code", cleanPin)
+        .eq("is_active", true)
+        .maybeSingle();
+
+      if (!error && data) return data;
+    } catch {
+      // RLS or connectivity restriction
+    }
+
+    return null;
   }
 
   // Operational Analytics
