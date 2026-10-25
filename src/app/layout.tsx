@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter, Playfair_Display } from "next/font/google";
 import { CartProvider } from "@/lib/store/cart-context";
 import { DevModeIndicator } from "@/components/ui/DevModeIndicator";
+import { isLocalAdapter } from "@/lib/adapter";
 import "@/styles/globals.css";
 
 const inter = Inter({
@@ -32,12 +33,14 @@ export default function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
+  const showDevIndicator = process.env.NODE_ENV !== "production" && isLocalAdapter();
+
   return (
     <html lang="en" className={`${inter.variable} ${playfair.variable} dark`}>
       <body className="bg-[#080808] text-[#F6EFE7] antialiased min-h-screen">
         <CartProvider>
           {children}
-          <DevModeIndicator />
+          {showDevIndicator && <DevModeIndicator />}
         </CartProvider>
       </body>
     </html>

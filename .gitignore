@@ -38,3 +38,7 @@ supabase/.branches/
 .idea/
 .vscode/
 Thumbs.db
+
+# Backup scratch data
+scripts/*.json
+

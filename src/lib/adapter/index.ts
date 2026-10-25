@@ -14,8 +14,25 @@ export function getDatabaseAdapter(): DatabaseAdapter {
   if (cachedAdapter) return cachedAdapter;
 
   const mode = process.env.DATA_ADAPTER?.toLowerCase().trim();
+  const isProduction = process.env.NODE_ENV === "production";
+
+  // Production safeguard: Never silently fall back to mock data in production
+  if (isProduction && mode !== "supabase") {
+    throw new Error(
+      "Server Configuration Error: Production environment requires DATA_ADAPTER=supabase. Mock data fallback is disabled in production."
+    );
+  }
 
   if (mode === "supabase") {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim();
+
+    if (!supabaseUrl || !supabaseAnonKey) {
+      throw new Error(
+        "Server Configuration Error: Missing required Supabase credentials (NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY)."
+      );
+    }
+
     cachedAdapter = new SupabaseDatabaseAdapter();
   } else {
     cachedAdapter = localDbAdapter;
@@ -25,8 +42,12 @@ export function getDatabaseAdapter(): DatabaseAdapter {
 }
 
 export function isLocalAdapter(): boolean {
-  const adapter = getDatabaseAdapter();
-  return adapter.adapterName === "local";
+  try {
+    const adapter = getDatabaseAdapter();
+    return adapter.adapterName === "local";
+  } catch {
+    return false;
+  }
 }
 
 export function getDefaultTenantId(): string {

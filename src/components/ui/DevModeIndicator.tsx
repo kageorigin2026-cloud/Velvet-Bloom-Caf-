@@ -1,10 +1,18 @@
 "use client";
 
 import React, { useState } from "react";
-import { AlertCircle, ChevronDown, ChevronUp, Database } from "lucide-react";
+import { ChevronDown, ChevronUp, Database } from "lucide-react";
 
 export function DevModeIndicator() {
   const [expanded, setExpanded] = useState(false);
+
+  // Safeguard: Never display mock/local dev banner in production or when Supabase is active
+  if (
+    process.env.NODE_ENV === "production" ||
+    process.env.NEXT_PUBLIC_DATA_ADAPTER === "supabase"
+  ) {
+    return null;
+  }
 
   return (
     <aside
@@ -43,4 +51,3 @@ export function DevModeIndicator() {
     </aside>
   );
 }
-
