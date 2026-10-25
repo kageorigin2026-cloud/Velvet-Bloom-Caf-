@@ -8,16 +8,26 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_MS = 5 * 60 * 1000; // 5 minute cooldown
 
 function getClientIp(req: NextRequest): string {
-  // 1. Trusted Vercel Edge IP header (set directly by Vercel infrastructure, stripped if provided by client)
+  // 1. Trusted Vercel Edge IP header (set directly by Vercel edge infrastructure, stripped if provided by client)
   const vercelIp = req.headers.get("x-vercel-ip");
-  if (vercelIp) return vercelIp.trim();
+  if (vercelIp && /^[0-9a-fA-F:.]+$/.test(vercelIp.trim())) {
+    return vercelIp.trim();
+  }
 
-  // 2. Real IP or Forwarded header
-  const realIp = req.headers.get("x-real-ip");
-  if (realIp) return realIp.trim();
-
+  // 2. Real IP or Forwarded header (when running on Vercel, x-real-ip from untrusted clients is not accepted)
+  const isVercel = Boolean(process.env.VERCEL);
   const forwarded = req.headers.get("x-forwarded-for");
-  if (forwarded) return forwarded.split(",")[0].trim();
+  if (forwarded) {
+    const raw = forwarded.split(",")[0].trim();
+    if (/^[0-9a-fA-F:.]+$/.test(raw)) return raw;
+  }
+
+  if (!isVercel) {
+    const realIp = req.headers.get("x-real-ip");
+    if (realIp && /^[0-9a-fA-F:.]+$/.test(realIp.trim())) {
+      return realIp.trim();
+    }
+  }
 
   return "127.0.0.1";
 }

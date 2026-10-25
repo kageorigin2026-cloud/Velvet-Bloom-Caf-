@@ -146,5 +146,44 @@ describe("QR Table Resolution, Session Lifecycle & RBAC Regression Tests", () =>
       expect(crossAuth.error).toBe("Cross-tenant access forbidden");
     });
   });
+
+  describe("Security Hardening & Migration Invariant Verification", () => {
+    it("ensures migration 20261025000000 contains all critical security protections", async () => {
+      const fs = await import("fs");
+      const path = await import("path");
+      const migrationPath = path.resolve(process.cwd(), "supabase/migrations/20261025000000_v2_table_session_and_rbac.sql");
+      const sql = fs.readFileSync(migrationPath, "utf-8");
+
+      // 1. Concurrency-safe advisory lock in staff auth
+      expect(sql).toContain("pg_advisory_xact_lock");
+      expect(sql).toContain("hashtext(p_tenant_id::text || ':' || v_clean_ip)");
+
+      // 2. Table row lock acquired BEFORE QR token verification and active session lookup
+      const lockIdx = sql.indexOf("FOR UPDATE");
+      const qrCheckIdx = sql.indexOf("qr_code_token IS DISTINCT FROM", lockIdx);
+      const sessionLookupIdx = sql.indexOf("SELECT * INTO v_session", qrCheckIdx);
+      expect(lockIdx).toBeGreaterThan(-1);
+      expect(qrCheckIdx).toBeGreaterThan(lockIdx);
+      expect(sessionLookupIdx).toBeGreaterThan(qrCheckIdx);
+
+      // 3. provision_initial_owner restricted strictly to service_role
+      expect(sql).toContain("REVOKE ALL ON FUNCTION public.provision_initial_owner(UUID, TEXT, TEXT, UUID, TEXT) FROM PUBLIC, anon, authenticated;");
+      expect(sql).toContain("GRANT EXECUTE ON FUNCTION public.provision_initial_owner(UUID, TEXT, TEXT, UUID, TEXT) TO service_role;");
+
+      // 4. provision_initial_owner verifies tenant existence and rejects duplicate owner
+      expect(sql).toContain("PERFORM id FROM public.tenants WHERE id = p_tenant_id;");
+      expect(sql).toContain("WHERE tenant_id = p_tenant_id AND role = 'OWNER'");
+
+      // 5. PIN migration compatibility with bcrypt hashes
+      expect(sql).toContain("pin_code NOT LIKE '$2%'");
+      expect(sql).toContain("crypt(trim(pin_code), gen_salt('bf', 8))");
+
+      // 6. Search path and SECURITY DEFINER enforcement on all functions
+      const secDefinerCount = (sql.match(/SECURITY DEFINER/g) || []).length;
+      const searchPathCount = (sql.match(/SET search_path = public, extensions/g) || []).length;
+      expect(secDefinerCount).toBe(5);
+      expect(searchPathCount).toBe(5);
+    });
+  });
 });
 

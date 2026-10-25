@@ -87,7 +87,7 @@ CREATE INDEX IF NOT EXISTS idx_staff_login_attempts_ip_time
 
 -- ------------------------------------------------------------
 -- 5. Secure Staff Authentication (Bcrypt Only, No Plaintext Fallback)
--- Validates rate limits and authenticates strictly via bcrypt hashes
+-- Validates rate limits with concurrency-safe advisory locks and authenticates strictly via bcrypt hashes
 -- ------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.authenticate_tenant_staff(
   p_tenant_id UUID,
@@ -102,6 +102,7 @@ AS $$
 DECLARE
   v_user RECORD;
   v_clean_pin TEXT;
+  v_clean_ip TEXT;
   v_failed_count INT;
   v_max_attempts INT := 5;
 BEGIN
@@ -111,11 +112,24 @@ BEGIN
   END IF;
 
   v_clean_pin := trim(p_pin);
+  v_clean_ip := COALESCE(NULLIF(trim(p_client_ip), ''), '127.0.0.1');
+
+  -- Sanitize IP string to prevent injection / spoofing anomalies
+  IF length(v_clean_ip) > 64 OR v_clean_ip ~ '[^0-9a-fA-F:\.]' THEN
+    v_clean_ip := '127.0.0.1';
+  END IF;
+
+  -- Acquire exclusive transactional advisory lock per tenant + IP to guarantee concurrency safety
+  PERFORM pg_advisory_xact_lock(hashtext(p_tenant_id::text || ':' || v_clean_ip));
+
+  -- Opportunistic cleanup of stale failed attempts older than 1 hour
+  DELETE FROM public.staff_login_attempts
+  WHERE attempted_at < (NOW() - INTERVAL '1 hour');
 
   -- 1. Check rate limits across all serverless instances
   SELECT COUNT(*) INTO v_failed_count
   FROM public.staff_login_attempts
-  WHERE client_ip = p_client_ip
+  WHERE client_ip = v_clean_ip
     AND tenant_id = p_tenant_id
     AND is_success = FALSE
     AND attempted_at > (NOW() - INTERVAL '5 minutes');
@@ -136,13 +150,13 @@ BEGIN
   IF NOT FOUND THEN
     -- Record failed attempt
     INSERT INTO public.staff_login_attempts (tenant_id, client_ip, is_success)
-    VALUES (p_tenant_id, p_client_ip, FALSE);
+    VALUES (p_tenant_id, v_clean_ip, FALSE);
     RETURN NULL;
   END IF;
 
   -- Record successful attempt & clear previous failed attempts for this IP
   DELETE FROM public.staff_login_attempts
-  WHERE client_ip = p_client_ip AND tenant_id = p_tenant_id;
+  WHERE client_ip = v_clean_ip AND tenant_id = p_tenant_id;
 
   RETURN to_jsonb(v_user);
 END;
@@ -154,7 +168,7 @@ GRANT EXECUTE ON FUNCTION public.authenticate_tenant_staff(UUID, TEXT, TEXT) TO 
 
 -- ------------------------------------------------------------
 -- 6. Hardened Table Session Creation with QR Authorization & Concurrency Lock
--- Requires valid physical QR token matching the table to prevent RPC spoofing
+-- Acquires row-level lock BEFORE QR validation and active session lookup
 -- ------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.get_or_create_tenant_session(
   p_tenant_id UUID,
@@ -178,23 +192,22 @@ BEGIN
     RAISE EXCEPTION 'Tenant ID, Table ID, and physical QR authorization token are required';
   END IF;
 
-  -- 2. Verify table belongs to tenant AND matches the physical QR authorization token
+  -- 2. Acquire row-level concurrency lock on table row BEFORE QR token validation and session lookup
   SELECT * INTO v_table
   FROM public.tables
-  WHERE id = p_table_id
-    AND tenant_id = p_tenant_id
-    AND qr_code_token = trim(p_qr_token);
-
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'Invalid table or QR authorization token for tenant %', p_tenant_id;
-  END IF;
-
-  -- 3. Row-level concurrency lock on table row to serialize parallel requests
-  PERFORM id FROM public.tables 
-  WHERE id = p_table_id AND tenant_id = p_tenant_id 
+  WHERE id = p_table_id AND tenant_id = p_tenant_id
   FOR UPDATE;
 
-  -- 4. Check for existing active session
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Table % not found for tenant %', p_table_id, p_tenant_id;
+  END IF;
+
+  -- 3. Validate physical QR authorization token against locked table row
+  IF v_table.qr_code_token IS DISTINCT FROM trim(p_qr_token) THEN
+    RAISE EXCEPTION 'Invalid QR authorization token for table %', p_table_id;
+  END IF;
+
+  -- 4. Check for existing active session (now protected under table row lock)
   SELECT * INTO v_session
   FROM public.table_sessions
   WHERE tenant_id = p_tenant_id
@@ -216,7 +229,7 @@ BEGIN
     RETURN to_jsonb(v_session);
   END IF;
 
-  -- 5. Create new active session atomically
+  -- 5. Create new active session atomically under table lock
   v_token := 'stok_' || substr(md5(random()::text || clock_timestamp()::text), 1, 10);
 
   INSERT INTO public.table_sessions (
@@ -388,8 +401,8 @@ GRANT EXECUTE ON FUNCTION public.set_tenant_staff_pin(UUID, TEXT) TO authenticat
 
 -- ------------------------------------------------------------
 -- 9. Secure Initial Owner Provisioning Procedure
--- Allows provisioning the initial Owner profile ONLY if no active Owner exists,
--- preventing reactivation of disabled accounts or role escalation.
+-- Restricted exclusively to service_role to prevent unauthorized owner creation or tenant spoofing.
+-- Allows provisioning the initial Owner profile ONLY if the tenant exists and has NO existing owner record.
 -- ------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.provision_initial_owner(
   p_tenant_id UUID,
@@ -407,16 +420,39 @@ DECLARE
   v_existing_owner RECORD;
   v_new_owner RECORD;
 BEGIN
-  -- Check if an active Owner already exists for this tenant
+  -- 1. Validate parameters
+  IF p_tenant_id IS NULL OR p_email IS NULL OR trim(p_email) = '' THEN
+    RAISE EXCEPTION 'Tenant ID and Email are required';
+  END IF;
+
+  IF p_pin IS NULL OR length(trim(p_pin)) < 4 THEN
+    RAISE EXCEPTION 'Owner PIN must be at least 4 digits';
+  END IF;
+
+  -- 2. Verify tenant exists
+  PERFORM id FROM public.tenants WHERE id = p_tenant_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Tenant % does not exist', p_tenant_id;
+  END IF;
+
+  -- 3. Check if ANY Owner (active or inactive) already exists for this tenant
   SELECT id INTO v_existing_owner
   FROM public.users
-  WHERE tenant_id = p_tenant_id AND role = 'OWNER' AND is_active = TRUE
+  WHERE tenant_id = p_tenant_id AND role = 'OWNER'
   LIMIT 1;
 
   IF FOUND THEN
-    RAISE EXCEPTION 'Tenant already has an active Owner. Use set_tenant_staff_pin or Supabase Auth to manage accounts.';
+    RAISE EXCEPTION 'Tenant already has an owner configured. Use set_tenant_staff_pin or standard staff management.';
   END IF;
 
+  -- 4. Check if email is already in use within this tenant
+  PERFORM id FROM public.users
+  WHERE tenant_id = p_tenant_id AND lower(email) = lower(trim(p_email));
+  IF FOUND THEN
+    RAISE EXCEPTION 'Email % is already in use for tenant %', p_email, p_tenant_id;
+  END IF;
+
+  -- 5. Insert new Owner with salted bcrypt hash
   INSERT INTO public.users (
     tenant_id,
     auth_user_id,
@@ -440,7 +476,8 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.provision_initial_owner(UUID, TEXT, TEXT, UUID, TEXT) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.provision_initial_owner(UUID, TEXT, TEXT, UUID, TEXT) TO authenticated, service_role;
+-- Restricted strictly to service_role; revoke from PUBLIC, anon, and authenticated
+REVOKE ALL ON FUNCTION public.provision_initial_owner(UUID, TEXT, TEXT, UUID, TEXT) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.provision_initial_owner(UUID, TEXT, TEXT, UUID, TEXT) TO service_role;
 
 
