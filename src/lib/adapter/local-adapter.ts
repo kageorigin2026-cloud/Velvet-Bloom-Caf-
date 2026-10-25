@@ -938,6 +938,35 @@ class LocalDatabaseAdapterImpl implements DatabaseAdapter {
     return this.users.find((u) => u.tenant_id === tenantId && u.pin_code === pin && u.is_active) || null;
   }
 
+  async hasActiveOwner(tenantId: string): Promise<boolean> {
+    return this.users.some((u) => u.tenant_id === tenantId && u.role === "OWNER" && u.is_active);
+  }
+
+  async provisionInitialOwner(
+    tenantId: string,
+    fullName: string,
+    email: string,
+    pin: string
+  ): Promise<User> {
+    const existing = this.users.find((u) => u.tenant_id === tenantId && u.role === "OWNER");
+    if (existing) {
+      throw new Error("Tenant already has an owner configured.");
+    }
+    const newUser: User = {
+      id: `u-owner-${Date.now()}`,
+      tenant_id: tenantId,
+      full_name: fullName.trim(),
+      email: email.trim().toLowerCase(),
+      role: "OWNER",
+      pin_code: pin.trim(),
+      is_active: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    this.users.push(newUser);
+    return newUser;
+  }
+
   // Live KPIs
   async getLiveKPIs(tenantId: string): Promise<LiveDashboardKPIs> {
     const tenantOrders = this.orders.filter((o) => o.tenant_id === tenantId);

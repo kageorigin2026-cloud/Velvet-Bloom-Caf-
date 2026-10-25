@@ -547,13 +547,22 @@ export function AdminDashboardView({
       {/* TAB 3: TABLES & QR TOKENS */}
       {activeTab === "tables" && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="font-serif text-lg font-medium text-[#F6EFE7]">
-              Table Layout & Secure QR Code Tokens
-            </h2>
-            <span className="text-xs text-[#A8A29E]">
-              {tables.length} Total Tables Configured
-            </span>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-2xl bg-[#171717] border border-[#C99A8A]/30">
+            <div>
+              <h2 className="font-serif text-lg font-medium text-[#F6EFE7]">
+                Table Layout & Secure QR Code Tokens
+              </h2>
+              <p className="text-xs text-[#A8A29E] mt-0.5">
+                {tables.length} production dining tables active for this café
+              </p>
+            </div>
+            <Link
+              href="/admin/qr-codes"
+              className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-[#D8B58A] to-[#C99A8A] text-[#080808] font-bold text-xs shadow-lg shadow-black/40 hover:opacity-95 transition-opacity"
+            >
+              <QrCode className="w-4 h-4" />
+              <span>Launch QR Standee Generator</span>
+            </Link>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">

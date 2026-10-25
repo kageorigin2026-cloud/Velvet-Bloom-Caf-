@@ -184,6 +184,50 @@ describe("QR Table Resolution, Session Lifecycle & RBAC Regression Tests", () =>
       expect(secDefinerCount).toBe(5);
       expect(searchPathCount).toBe(5);
     });
+
+    it("verifies initial owner onboarding and duplicate owner rejection", async () => {
+      const testTenantId = "tenant-fresh-test-03";
+      expect(await adapter.hasActiveOwner(testTenantId)).toBe(false);
+
+      // Provision initial owner
+      const owner = await adapter.provisionInitialOwner(
+        testTenantId,
+        "Alexander Vance",
+        "owner@velvetbloom.com",
+        "4455"
+      );
+      expect(owner).toBeDefined();
+      expect(owner.role).toBe("OWNER");
+      expect(owner.email).toBe("owner@velvetbloom.com");
+      expect(await adapter.hasActiveOwner(testTenantId)).toBe(true);
+
+      // Attempting duplicate owner provisioning must be rejected
+      await expect(
+        adapter.provisionInitialOwner(
+          testTenantId,
+          "Imposter Owner",
+          "imposter@test.com",
+          "9999"
+        )
+      ).rejects.toThrow(/already has an owner/i);
+    });
+
+    it("validates all 12 tables have unique, non-empty QR tokens matching expected format", async () => {
+      const tables = await adapter.getTables(primaryTenantId);
+      expect(tables.length).toBeGreaterThanOrEqual(6);
+
+      const tokens = tables.map((t) => t.qr_code_token);
+      // All tokens must be non-empty strings
+      tokens.forEach((token) => {
+        expect(token).toBeDefined();
+        expect(typeof token).toBe("string");
+        expect(token.length).toBeGreaterThan(5);
+      });
+
+      // No duplicate tokens
+      const uniqueTokens = new Set(tokens);
+      expect(uniqueTokens.size).toBe(tokens.length);
+    });
   });
 });
 

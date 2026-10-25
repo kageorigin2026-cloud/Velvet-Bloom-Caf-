@@ -1194,6 +1194,49 @@ export class SupabaseDatabaseAdapter implements DatabaseAdapter {
     return null;
   }
 
+  async hasActiveOwner(tenantId: string): Promise<boolean> {
+    const client = this.getClient();
+    try {
+      const { data, error } = await client
+        .from("users")
+        .select("id")
+        .eq("tenant_id", tenantId)
+        .eq("role", "OWNER")
+        .eq("is_active", true)
+        .limit(1);
+
+      if (error) {
+        console.error("hasActiveOwner query error:", error.message);
+        return false;
+      }
+      return Boolean(data && data.length > 0);
+    } catch {
+      return false;
+    }
+  }
+
+  async provisionInitialOwner(
+    tenantId: string,
+    fullName: string,
+    email: string,
+    pin: string
+  ): Promise<User> {
+    const client = this.getClient();
+    const { data, error } = await client.rpc("provision_initial_owner", {
+      p_tenant_id: tenantId,
+      p_full_name: fullName.trim(),
+      p_email: email.trim().toLowerCase(),
+      p_auth_user_id: null,
+      p_pin: pin.trim(),
+    });
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    return data as User;
+  }
+
   // Operational Analytics
   async getLiveKPIs(tenantId: string): Promise<LiveDashboardKPIs> {
     const client = this.getClient();

@@ -88,6 +88,8 @@ export interface DatabaseAdapter {
   getUsers(tenantId: string): Promise<User[]>;
   getUserByEmail(tenantId: string, email: string): Promise<User | null>;
   getUserByPin(tenantId: string, pin: string, clientIp?: string): Promise<User | null>;
+  hasActiveOwner(tenantId: string): Promise<boolean>;
+  provisionInitialOwner(tenantId: string, fullName: string, email: string, pin: string): Promise<User>;
   
   // Operational Analytics
   getLiveKPIs(tenantId: string): Promise<LiveDashboardKPIs>;

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { CafeLogo } from "@/components/brand/CafeLogo";
 import { AudioAlertPlayer } from "@/components/ui/AudioAlertPlayer";
-import { UtensilsCrossed, Receipt, ShieldCheck, LogOut, Radio } from "lucide-react";
+import { UtensilsCrossed, Receipt, ShieldCheck, LogOut, Radio, QrCode } from "lucide-react";
 
 interface StaffHeaderProps {
   currentRole?: string;
@@ -31,6 +31,7 @@ export function StaffHeader({ currentRole = "STAFF", staffName = "Staff Member" 
     { href: "/chef", label: "Kitchen Display", icon: UtensilsCrossed, roles: ["CHEF", "OWNER", "ADMIN", "STAFF"] },
     { href: "/staff", label: "Service & Billing", icon: Receipt, roles: ["STAFF", "OWNER", "ADMIN", "WAITER", "CASHIER"] },
     { href: "/admin", label: "Admin & Analytics", icon: ShieldCheck, roles: ["OWNER", "ADMIN"] },
+    { href: "/admin/qr-codes", label: "QR Standees", icon: QrCode, roles: ["OWNER", "ADMIN"] },
   ];
 
   return (
