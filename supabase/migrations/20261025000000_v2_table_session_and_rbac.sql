@@ -1,21 +1,98 @@
 -- ============================================================
--- VELVET BLOOM CAFÉ V2 — TABLE SESSION ATOMICITY, RBAC & SECURE STAFF AUTH
--- Forward Migration: 20261025000000_v2_table_session_and_rbac.sql
+-- VELVET BLOOM CAFÉ V2 — PRODUCTION SECURITY HARDENING & RBAC
+-- Migration: 20261025000000_v2_table_session_and_rbac.sql
+-- Target: Supabase V2 (iwszvepliiqwaoetgaub)
+-- Non-destructive forward migration with strict least privilege
 -- ============================================================
 
--- Ensure pgcrypto extension is available for salted hashing
+-- Ensure pgcrypto extension is active for salted bcrypt hashing
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
--- 1. Ensure UserRole check constraint includes MANAGER
-ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
-ALTER TABLE users ADD CONSTRAINT users_role_check 
+-- ------------------------------------------------------------
+-- 1. Schema & Constraints: Ensure UserRole includes MANAGER
+-- ------------------------------------------------------------
+ALTER TABLE public.users DROP CONSTRAINT IF EXISTS users_role_check;
+ALTER TABLE public.users ADD CONSTRAINT users_role_check 
   CHECK (role IN ('OWNER', 'ADMIN', 'MANAGER', 'CHEF', 'STAFF', 'WAITER', 'CASHIER', 'CUSTOMER'));
 
--- 2. Atomic Table Status Update Function (Staff / Service-Role only)
-CREATE OR REPLACE FUNCTION update_tenant_table_status(
+-- ------------------------------------------------------------
+-- 2. Audit & Deduplicate Existing Active Sessions (Data Consistency)
+-- If concurrent requests created duplicate active sessions on a table,
+-- keep the newest active session and cleanly close previous duplicates.
+-- ------------------------------------------------------------
+DO $$
+DECLARE
+  v_dup RECORD;
+BEGIN
+  FOR v_dup IN
+    SELECT table_id, COUNT(*) as cnt
+    FROM public.table_sessions
+    WHERE is_active = TRUE
+    GROUP BY table_id
+    HAVING COUNT(*) > 1
+  LOOP
+    UPDATE public.table_sessions
+    SET is_active = FALSE,
+        ended_at = NOW()
+    WHERE table_id = v_dup.table_id
+      AND is_active = TRUE
+      AND id NOT IN (
+        SELECT id FROM public.table_sessions
+        WHERE table_id = v_dup.table_id AND is_active = TRUE
+        ORDER BY created_at DESC
+        LIMIT 1
+      );
+  END LOOP;
+
+  -- Ensure all tables with an active session have status = 'OCCUPIED' and current_session_id set
+  UPDATE public.tables t
+  SET status = 'OCCUPIED',
+      current_session_id = s.id,
+      updated_at = NOW()
+  FROM (
+    SELECT DISTINCT ON (table_id) id, table_id
+    FROM public.table_sessions
+    WHERE is_active = TRUE
+    ORDER BY table_id, created_at DESC
+  ) s
+  WHERE t.id = s.table_id
+    AND (t.status = 'AVAILABLE' OR t.current_session_id IS NULL OR t.current_session_id != s.id);
+END $$;
+
+-- ------------------------------------------------------------
+-- 3. Transition Existing Plaintext PINs to Bcrypt Hashes
+-- Safely rehash any legacy unhashed credentials without locking out staff
+-- ------------------------------------------------------------
+UPDATE public.users
+SET pin_code = crypt(trim(pin_code), gen_salt('bf', 8)),
+    updated_at = NOW()
+WHERE pin_code IS NOT NULL
+  AND pin_code NOT LIKE '$2%'
+  AND length(trim(pin_code)) >= 4;
+
+-- ------------------------------------------------------------
+-- 4. Cross-Instance Login Rate Limiting Table
+-- Tracks failed attempts across all serverless lambda instances
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.staff_login_attempts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
+  client_ip TEXT NOT NULL,
+  attempted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  is_success BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+CREATE INDEX IF NOT EXISTS idx_staff_login_attempts_ip_time 
+  ON public.staff_login_attempts(client_ip, attempted_at);
+
+-- ------------------------------------------------------------
+-- 5. Secure Staff Authentication (Bcrypt Only, No Plaintext Fallback)
+-- Validates rate limits and authenticates strictly via bcrypt hashes
+-- ------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.authenticate_tenant_staff(
   p_tenant_id UUID,
-  p_table_id UUID,
-  p_status TEXT
+  p_pin TEXT,
+  p_client_ip TEXT DEFAULT '127.0.0.1'
 )
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -23,32 +100,66 @@ SECURITY DEFINER
 SET search_path = public, extensions
 AS $$
 DECLARE
-  v_table RECORD;
+  v_user RECORD;
+  v_clean_pin TEXT;
+  v_failed_count INT;
+  v_max_attempts INT := 5;
 BEGIN
-  -- Strict tenant check
-  UPDATE tables
-  SET status = p_status,
-      updated_at = NOW()
-  WHERE id = p_table_id AND tenant_id = p_tenant_id
-  RETURNING * INTO v_table;
-
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'Table % not found for tenant %', p_table_id, p_tenant_id;
+  -- Strict input validation
+  IF p_tenant_id IS NULL OR p_pin IS NULL OR length(trim(p_pin)) < 4 THEN
+    RETURN NULL;
   END IF;
 
-  RETURN to_jsonb(v_table);
+  v_clean_pin := trim(p_pin);
+
+  -- 1. Check rate limits across all serverless instances
+  SELECT COUNT(*) INTO v_failed_count
+  FROM public.staff_login_attempts
+  WHERE client_ip = p_client_ip
+    AND tenant_id = p_tenant_id
+    AND is_success = FALSE
+    AND attempted_at > (NOW() - INTERVAL '5 minutes');
+
+  IF v_failed_count >= v_max_attempts THEN
+    RAISE EXCEPTION 'Too many failed login attempts. Terminal locked for 5 minutes.';
+  END IF;
+
+  -- 2. Verify staff credentials strictly with bcrypt hash (No plaintext fallback)
+  SELECT id, tenant_id, auth_user_id, full_name, email, role, phone, is_active, created_at, updated_at
+  INTO v_user
+  FROM public.users
+  WHERE tenant_id = p_tenant_id
+    AND is_active = TRUE
+    AND pin_code LIKE '$2%'
+    AND crypt(v_clean_pin, pin_code) = pin_code;
+
+  IF NOT FOUND THEN
+    -- Record failed attempt
+    INSERT INTO public.staff_login_attempts (tenant_id, client_ip, is_success)
+    VALUES (p_tenant_id, p_client_ip, FALSE);
+    RETURN NULL;
+  END IF;
+
+  -- Record successful attempt & clear previous failed attempts for this IP
+  DELETE FROM public.staff_login_attempts
+  WHERE client_ip = p_client_ip AND tenant_id = p_tenant_id;
+
+  RETURN to_jsonb(v_user);
 END;
 $$;
 
--- Restricted: only authenticated staff & service role may change table statuses directly
-REVOKE EXECUTE ON FUNCTION update_tenant_table_status(UUID, UUID, TEXT) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION update_tenant_table_status(UUID, UUID, TEXT) TO authenticated, service_role;
+-- Restrict to service_role and authenticated callers; anon access revoked to prevent rate-limit bypass
+REVOKE ALL ON FUNCTION public.authenticate_tenant_staff(UUID, TEXT, TEXT) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.authenticate_tenant_staff(UUID, TEXT, TEXT) TO service_role, authenticated;
 
--- 3. Atomic Table Session Creation with Concurrency Lock
--- Prevents duplicate session creation when multiple requests or prefetch calls arrive within milliseconds
-CREATE OR REPLACE FUNCTION get_or_create_tenant_session(
+-- ------------------------------------------------------------
+-- 6. Hardened Table Session Creation with QR Authorization & Concurrency Lock
+-- Requires valid physical QR token matching the table to prevent RPC spoofing
+-- ------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.get_or_create_tenant_session(
   p_tenant_id UUID,
   p_table_id UUID,
+  p_qr_token TEXT,
   p_customer_name TEXT DEFAULT 'Valued Guest',
   p_phone TEXT DEFAULT NULL
 )
@@ -62,21 +173,30 @@ DECLARE
   v_session RECORD;
   v_token TEXT;
 BEGIN
-  -- 1. Verify table belongs to tenant
-  SELECT * INTO v_table
-  FROM tables
-  WHERE id = p_table_id AND tenant_id = p_tenant_id;
-
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'Table % not found for tenant %', p_table_id, p_tenant_id;
+  -- 1. Validate parameters
+  IF p_tenant_id IS NULL OR p_table_id IS NULL OR p_qr_token IS NULL OR trim(p_qr_token) = '' THEN
+    RAISE EXCEPTION 'Tenant ID, Table ID, and physical QR authorization token are required';
   END IF;
 
-  -- 2. Concurrency lock on table row to serialize concurrent session requests
-  PERFORM id FROM tables WHERE id = p_table_id AND tenant_id = p_tenant_id FOR UPDATE;
+  -- 2. Verify table belongs to tenant AND matches the physical QR authorization token
+  SELECT * INTO v_table
+  FROM public.tables
+  WHERE id = p_table_id
+    AND tenant_id = p_tenant_id
+    AND qr_code_token = trim(p_qr_token);
 
-  -- 3. Check for existing active session
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Invalid table or QR authorization token for tenant %', p_tenant_id;
+  END IF;
+
+  -- 3. Row-level concurrency lock on table row to serialize parallel requests
+  PERFORM id FROM public.tables 
+  WHERE id = p_table_id AND tenant_id = p_tenant_id 
+  FOR UPDATE;
+
+  -- 4. Check for existing active session
   SELECT * INTO v_session
-  FROM table_sessions
+  FROM public.table_sessions
   WHERE tenant_id = p_tenant_id
     AND table_id = p_table_id
     AND is_active = TRUE
@@ -84,10 +204,10 @@ BEGIN
   LIMIT 1;
 
   IF FOUND THEN
-    -- If table is still marked AVAILABLE, transition it to OCCUPIED atomically
-    IF v_table.status = 'AVAILABLE' THEN
-      UPDATE tables
-      SET status = 'OCCUPIED',
+    -- Ensure table status reflects occupancy and points to active session
+    IF v_table.status = 'AVAILABLE' OR v_table.current_session_id IS DISTINCT FROM v_session.id THEN
+      UPDATE public.tables
+      SET status = CASE WHEN status = 'AVAILABLE' THEN 'OCCUPIED' ELSE status END,
           current_session_id = v_session.id,
           updated_at = NOW()
       WHERE id = p_table_id AND tenant_id = p_tenant_id;
@@ -96,10 +216,10 @@ BEGIN
     RETURN to_jsonb(v_session);
   END IF;
 
-  -- 4. Create new active session atomically
+  -- 5. Create new active session atomically
   v_token := 'stok_' || substr(md5(random()::text || clock_timestamp()::text), 1, 10);
 
-  INSERT INTO table_sessions (
+  INSERT INTO public.table_sessions (
     tenant_id,
     table_id,
     session_token,
@@ -111,15 +231,15 @@ BEGIN
     p_tenant_id,
     p_table_id,
     v_token,
-    COALESCE(NULLIF(p_customer_name, ''), 'Valued Guest'),
-    p_phone,
+    COALESCE(NULLIF(trim(p_customer_name), ''), 'Valued Guest'),
+    NULLIF(trim(p_phone), ''),
     TRUE,
     NOW()
   )
   RETURNING * INTO v_session;
 
-  -- 5. Atomically update table status to OCCUPIED
-  UPDATE tables
+  -- 6. Atomically transition table status to OCCUPIED
+  UPDATE public.tables
   SET status = 'OCCUPIED',
       current_session_id = v_session.id,
       updated_at = NOW()
@@ -129,13 +249,17 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION get_or_create_tenant_session(UUID, UUID, TEXT, TEXT) TO anon, authenticated, service_role;
+-- Granted to anon, authenticated, and service_role (needed for seated customer QR ordering)
+GRANT EXECUTE ON FUNCTION public.get_or_create_tenant_session(UUID, UUID, TEXT, TEXT, TEXT) TO anon, authenticated, service_role;
 
--- 4. Secure Staff Terminal PIN Authentication Function (Salted Cryptographic Hash)
--- Authenticates a staff PIN securely inside PostgreSQL using pgcrypto bcrypt hash verification
-CREATE OR REPLACE FUNCTION authenticate_tenant_staff(
+-- ------------------------------------------------------------
+-- 7. RBAC Table Status Update Function
+-- Strictly restricts transitions by staff role and prevents cross-tenant changes
+-- ------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.update_tenant_table_status(
   p_tenant_id UUID,
-  p_pin TEXT
+  p_table_id UUID,
+  p_status TEXT
 )
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -143,40 +267,67 @@ SECURITY DEFINER
 SET search_path = public, extensions
 AS $$
 DECLARE
-  v_user RECORD;
-  v_clean_pin TEXT;
+  v_caller_role TEXT;
+  v_caller_tenant UUID;
+  v_table RECORD;
 BEGIN
-  IF p_pin IS NULL OR length(trim(p_pin)) < 4 THEN
-    RETURN NULL;
+  -- 1. Validate status input
+  IF p_status NOT IN ('AVAILABLE', 'OCCUPIED', 'BILL_REQUESTED', 'PAYMENT_PENDING', 'PAID', 'CLEANING') THEN
+    RAISE EXCEPTION 'Invalid table status: %', p_status;
   END IF;
 
-  v_clean_pin := trim(p_pin);
+  -- 2. Verify caller authorization if called via authenticated user
+  IF auth.uid() IS NOT NULL THEN
+    SELECT role, tenant_id INTO v_caller_role, v_caller_tenant
+    FROM public.users
+    WHERE auth_user_id = auth.uid() AND is_active = TRUE;
 
-  SELECT id, tenant_id, auth_user_id, full_name, email, role, phone, is_active, created_at, updated_at
-  INTO v_user
-  FROM users
-  WHERE tenant_id = p_tenant_id
-    AND is_active = TRUE
-    AND (
-      -- Bcrypt hash verification
-      (pin_code LIKE '$2%' AND crypt(v_clean_pin, pin_code) = pin_code)
-      -- Fallback during transition if pin was plain
-      OR (pin_code = v_clean_pin)
-    );
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Authenticated staff profile not found';
+    END IF;
+
+    IF v_caller_tenant != p_tenant_id THEN
+      RAISE EXCEPTION 'Cross-tenant table update forbidden';
+    END IF;
+
+    -- Role transition boundary enforcement
+    IF v_caller_role NOT IN ('OWNER', 'ADMIN', 'MANAGER') THEN
+      IF v_caller_role IN ('WAITER', 'STAFF') AND p_status NOT IN ('OCCUPIED', 'BILL_REQUESTED', 'CLEANING', 'AVAILABLE') THEN
+        RAISE EXCEPTION 'Waiters may only update table to OCCUPIED, BILL_REQUESTED, CLEANING, or AVAILABLE';
+      ELSIF v_caller_role = 'CASHIER' AND p_status NOT IN ('BILL_REQUESTED', 'PAYMENT_PENDING', 'PAID') THEN
+        RAISE EXCEPTION 'Cashiers may only update table to BILL_REQUESTED, PAYMENT_PENDING, or PAID';
+      ELSIF v_caller_role = 'CHEF' THEN
+        RAISE EXCEPTION 'Chefs are not permitted to change dining table floor status';
+      END IF;
+    END IF;
+  END IF;
+
+  -- 3. Execute update with strict tenant isolation
+  UPDATE public.tables
+  SET status = p_status,
+      current_session_id = CASE WHEN p_status IN ('AVAILABLE', 'PAID', 'CLEANING') THEN NULL ELSE current_session_id END,
+      updated_at = NOW()
+  WHERE id = p_table_id AND tenant_id = p_tenant_id
+  RETURNING * INTO v_table;
 
   IF NOT FOUND THEN
-    RETURN NULL;
+    RAISE EXCEPTION 'Table % not found for tenant %', p_table_id, p_tenant_id;
   END IF;
 
-  RETURN to_jsonb(v_user);
+  RETURN to_jsonb(v_table);
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION authenticate_tenant_staff(UUID, TEXT) TO anon, authenticated, service_role;
+-- Restrict to authenticated staff and service_role; revoke from anon
+REVOKE ALL ON FUNCTION public.update_tenant_table_status(UUID, UUID, TEXT) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.update_tenant_table_status(UUID, UUID, TEXT) TO authenticated, service_role;
 
--- 5. Secure Procedure for Admin/Owner to Update Staff PINs with Cryptographic Hashing
-CREATE OR REPLACE FUNCTION set_tenant_staff_pin(
-  p_tenant_id UUID,
+-- ------------------------------------------------------------
+-- 8. Owner/Admin PIN Management (Cryptographically Salted & Verified)
+-- Enforces caller authorization strictly via auth.uid(), verified tenant membership,
+-- and forbids caller-supplied tenant/role spoofing
+-- ------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.set_tenant_staff_pin(
   p_user_id UUID,
   p_new_pin TEXT
 )
@@ -185,84 +336,111 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, extensions
 AS $$
+DECLARE
+  v_caller_role TEXT;
+  v_caller_tenant UUID;
+  v_target_user RECORD;
 BEGIN
-  IF p_new_pin IS NULL OR length(trim(p_new_pin)) < 4 THEN
-    RAISE EXCEPTION 'Staff PIN must be at least 4 digits';
+  -- 1. Identify caller strictly from auth.uid()
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'Authentication required';
   END IF;
 
-  UPDATE users
-  SET pin_code = crypt(trim(p_new_pin), gen_salt('bf', 8)),
-      updated_at = NOW()
-  WHERE id = p_user_id AND tenant_id = p_tenant_id;
+  SELECT role, tenant_id INTO v_caller_role, v_caller_tenant
+  FROM public.users
+  WHERE auth_user_id = auth.uid() AND is_active = TRUE;
 
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'Staff user % not found for tenant %', p_user_id, p_tenant_id;
+    RAISE EXCEPTION 'Caller user profile not found or inactive';
   END IF;
+
+  -- 2. Verify caller has OWNER or ADMIN privileges
+  IF v_caller_role NOT IN ('OWNER', 'ADMIN') THEN
+    RAISE EXCEPTION 'Insufficient permissions. Only OWNER or ADMIN may update staff PINs';
+  END IF;
+
+  -- 3. Validate new PIN complexity
+  IF p_new_pin IS NULL OR length(trim(p_new_pin)) < 4 THEN
+    RAISE EXCEPTION 'PIN must be at least 4 digits';
+  END IF;
+
+  -- 4. Verify target user belongs strictly to the caller tenant
+  SELECT * INTO v_target_user
+  FROM public.users
+  WHERE id = p_user_id AND tenant_id = v_caller_tenant;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Target staff user not found in caller tenant';
+  END IF;
+
+  -- 5. Update with bcrypt salted hash
+  UPDATE public.users
+  SET pin_code = crypt(trim(p_new_pin), gen_salt('bf', 8)),
+      updated_at = NOW()
+  WHERE id = p_user_id AND tenant_id = v_caller_tenant;
 
   RETURN TRUE;
 END;
 $$;
 
-REVOKE EXECUTE ON FUNCTION set_tenant_staff_pin(UUID, UUID, TEXT) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION set_tenant_staff_pin(UUID, UUID, TEXT) TO authenticated, service_role;
+REVOKE ALL ON FUNCTION public.set_tenant_staff_pin(UUID, TEXT) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.set_tenant_staff_pin(UUID, TEXT) TO authenticated, service_role;
 
--- 6. Provision Initial Staff Profiles with Salted Bcrypt Hashed Credentials
--- Notice: Stored with bcrypt salts via pgcrypto crypt(), NEVER plaintext
-INSERT INTO users (id, tenant_id, full_name, email, role, pin_code, phone, is_active)
-VALUES 
-  (
-    '00000000-0000-0000-0000-000000000101',
-    '00000000-0000-0000-0000-000000000001',
-    'Alexander Vance (Owner)',
-    'owner@velvetbloom.com',
+-- ------------------------------------------------------------
+-- 9. Secure Initial Owner Provisioning Procedure
+-- Allows provisioning the initial Owner profile ONLY if no active Owner exists,
+-- preventing reactivation of disabled accounts or role escalation.
+-- ------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.provision_initial_owner(
+  p_tenant_id UUID,
+  p_full_name TEXT,
+  p_email TEXT,
+  p_auth_user_id UUID,
+  p_pin TEXT
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions
+AS $$
+DECLARE
+  v_existing_owner RECORD;
+  v_new_owner RECORD;
+BEGIN
+  -- Check if an active Owner already exists for this tenant
+  SELECT id INTO v_existing_owner
+  FROM public.users
+  WHERE tenant_id = p_tenant_id AND role = 'OWNER' AND is_active = TRUE
+  LIMIT 1;
+
+  IF FOUND THEN
+    RAISE EXCEPTION 'Tenant already has an active Owner. Use set_tenant_staff_pin or Supabase Auth to manage accounts.';
+  END IF;
+
+  INSERT INTO public.users (
+    tenant_id,
+    auth_user_id,
+    full_name,
+    email,
+    role,
+    pin_code,
+    is_active
+  ) VALUES (
+    p_tenant_id,
+    p_auth_user_id,
+    COALESCE(NULLIF(trim(p_full_name), ''), 'Alexander Vance (Owner)'),
+    lower(trim(p_email)),
     'OWNER',
-    crypt('1111', gen_salt('bf', 8)),
-    '+91 98765 43210',
-    TRUE
-  ),
-  (
-    '00000000-0000-0000-0000-000000000102',
-    '00000000-0000-0000-0000-000000000001',
-    'Elena Rostova (General Manager)',
-    'manager@velvetbloom.com',
-    'MANAGER',
-    crypt('5555', gen_salt('bf', 8)),
-    '+91 98765 43215',
-    TRUE
-  ),
-  (
-    '00000000-0000-0000-0000-000000000103',
-    '00000000-0000-0000-0000-000000000001',
-    'Chef Marcus Chen (Executive Chef)',
-    'chef@velvetbloom.com',
-    'CHEF',
-    crypt('2222', gen_salt('bf', 8)),
-    '+91 98765 43211',
-    TRUE
-  ),
-  (
-    '00000000-0000-0000-0000-000000000104',
-    '00000000-0000-0000-0000-000000000001',
-    'Liam Patel (Head Waiter)',
-    'waiter@velvetbloom.com',
-    'WAITER',
-    crypt('3333', gen_salt('bf', 8)),
-    '+91 98765 43212',
-    TRUE
-  ),
-  (
-    '00000000-0000-0000-0000-000000000105',
-    '00000000-0000-0000-0000-000000000001',
-    'Sophia Al-Mansoor (Chief Cashier)',
-    'cashier@velvetbloom.com',
-    'CASHIER',
-    crypt('4444', gen_salt('bf', 8)),
-    '+91 98765 43214',
+    crypt(trim(p_pin), gen_salt('bf', 8)),
     TRUE
   )
-ON CONFLICT (tenant_id, email) DO UPDATE SET
-  full_name = EXCLUDED.full_name,
-  role = EXCLUDED.role,
-  pin_code = EXCLUDED.pin_code,
-  phone = EXCLUDED.phone,
-  is_active = TRUE;
+  RETURNING * INTO v_new_owner;
+
+  RETURN to_jsonb(v_new_owner);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.provision_initial_owner(UUID, TEXT, TEXT, UUID, TEXT) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.provision_initial_owner(UUID, TEXT, TEXT, UUID, TEXT) TO authenticated, service_role;
+
+

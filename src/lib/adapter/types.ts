@@ -41,7 +41,7 @@ export interface DatabaseAdapter {
   getTables(tenantId: string): Promise<CafeTable[]>;
   getTableByQr(tenantId: string, qrToken: string): Promise<CafeTable | null>;
   updateTableStatus(tenantId: string, tableId: string, status: TableStatus): Promise<CafeTable>;
-  getOrCreateSession(tenantId: string, tableId: string, customerName?: string, phone?: string): Promise<TableSession>;
+  getOrCreateSession(tenantId: string, tableId: string, customerName?: string, phone?: string, qrToken?: string): Promise<TableSession>;
   closeSession(tenantId: string, sessionId: string): Promise<TableSession>;
   getActiveSession(tenantId: string, tableId: string): Promise<TableSession | null>;
   
@@ -87,7 +87,7 @@ export interface DatabaseAdapter {
   // Users / Staff
   getUsers(tenantId: string): Promise<User[]>;
   getUserByEmail(tenantId: string, email: string): Promise<User | null>;
-  getUserByPin(tenantId: string, pin: string): Promise<User | null>;
+  getUserByPin(tenantId: string, pin: string, clientIp?: string): Promise<User | null>;
   
   // Operational Analytics
   getLiveKPIs(tenantId: string): Promise<LiveDashboardKPIs>;

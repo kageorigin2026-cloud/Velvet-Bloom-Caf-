@@ -27,7 +27,7 @@ export default async function TablePage({ params }: PageProps) {
 
   // Parallelize session creation, menu loading, and cafe settings for fast response times
   const [session, categories, menuItems, settings] = await Promise.all([
-    adapter.getOrCreateSession(tenantId, table.id),
+    adapter.getOrCreateSession(tenantId, table.id, undefined, undefined, token),
     adapter.getCategories(tenantId),
     adapter.getMenuItems(tenantId),
     adapter.getSettings(tenantId),

@@ -198,7 +198,8 @@ export class SupabaseDatabaseAdapter implements DatabaseAdapter {
     tenantId: string,
     tableId: string,
     customerName?: string,
-    phone?: string
+    phone?: string,
+    qrToken?: string
   ): Promise<TableSession> {
     // Concurrency deduplication: reuse active in-flight session creation promise for this table
     const dedupeKey = `${tenantId}:${tableId}`;
@@ -210,20 +211,35 @@ export class SupabaseDatabaseAdapter implements DatabaseAdapter {
     const sessionPromise = (async (): Promise<TableSession> => {
       const client = this.getClient();
 
-      // 1. Try atomic PostgreSQL stored procedure first (with row-level lock & transaction)
-      try {
-        const { data: rpcSession, error: rpcErr } = await client.rpc("get_or_create_tenant_session", {
-          p_tenant_id: tenantId,
-          p_table_id: tableId,
-          p_customer_name: customerName || "Valued Guest",
-          p_phone: phone || null,
-        });
+      // Resolve physical QR token if not passed directly
+      let effectiveQrToken = qrToken;
+      if (!effectiveQrToken) {
+        const { data: tableData } = await client
+          .from("tables")
+          .select("qr_code_token")
+          .eq("id", tableId)
+          .eq("tenant_id", tenantId)
+          .maybeSingle();
+        effectiveQrToken = tableData?.qr_code_token;
+      }
 
-        if (!rpcErr && rpcSession) {
-          return rpcSession as TableSession;
+      // 1. Try atomic PostgreSQL stored procedure first (with row-level lock & transaction)
+      if (effectiveQrToken) {
+        try {
+          const { data: rpcSession, error: rpcErr } = await client.rpc("get_or_create_tenant_session", {
+            p_tenant_id: tenantId,
+            p_table_id: tableId,
+            p_qr_token: effectiveQrToken,
+            p_customer_name: customerName || "Valued Guest",
+            p_phone: phone || null,
+          });
+
+          if (!rpcErr && rpcSession) {
+            return rpcSession as TableSession;
+          }
+        } catch {
+          // Fallback to application-level query sequence
         }
-      } catch {
-        // Fallback to application-level query sequence
       }
 
       // 2. Direct query fallback
@@ -1159,34 +1175,20 @@ export class SupabaseDatabaseAdapter implements DatabaseAdapter {
     return data;
   }
 
-  async getUserByPin(tenantId: string, pin: string): Promise<User | null> {
+  async getUserByPin(tenantId: string, pin: string, clientIp?: string): Promise<User | null> {
     const client = this.getClient();
     const cleanPin = pin.trim();
 
-    // 1. Try secure RPC authentication
+    // Secure RPC authentication with IP rate limit tracking & bcrypt hashing
     try {
       const { data: rpcUser, error: rpcErr } = await client.rpc("authenticate_tenant_staff", {
         p_tenant_id: tenantId,
         p_pin: cleanPin,
+        p_client_ip: clientIp || "127.0.0.1",
       });
       if (!rpcErr && rpcUser) return rpcUser as User;
     } catch {
-      // Fallback to table queries
-    }
-
-    // 2. Direct table query fallback
-    try {
-      const { data, error } = await client
-        .from("users")
-        .select("*")
-        .eq("tenant_id", tenantId)
-        .eq("pin_code", cleanPin)
-        .eq("is_active", true)
-        .maybeSingle();
-
-      if (!error && data) return data;
-    } catch {
-      // RLS or connectivity restriction
+      // Failure or unavailable RPC returns null
     }
 
     return null;

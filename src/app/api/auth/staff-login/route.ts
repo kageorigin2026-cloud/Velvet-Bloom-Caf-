@@ -8,10 +8,17 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_MS = 5 * 60 * 1000; // 5 minute cooldown
 
 function getClientIp(req: NextRequest): string {
-  const forwarded = req.headers.get("x-forwarded-for");
-  if (forwarded) return forwarded.split(",")[0].trim();
+  // 1. Trusted Vercel Edge IP header (set directly by Vercel infrastructure, stripped if provided by client)
+  const vercelIp = req.headers.get("x-vercel-ip");
+  if (vercelIp) return vercelIp.trim();
+
+  // 2. Real IP or Forwarded header
   const realIp = req.headers.get("x-real-ip");
   if (realIp) return realIp.trim();
+
+  const forwarded = req.headers.get("x-forwarded-for");
+  if (forwarded) return forwarded.split(",")[0].trim();
+
   return "127.0.0.1";
 }
 
@@ -41,6 +48,7 @@ export async function POST(req: NextRequest) {
       pin: body.pin,
       email: body.email,
       password: body.password,
+      clientIp: ip,
     });
 
     if (!user) {

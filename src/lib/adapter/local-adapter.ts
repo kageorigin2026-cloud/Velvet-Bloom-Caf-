@@ -279,7 +279,8 @@ class LocalDatabaseAdapterImpl implements DatabaseAdapter {
     tenantId: string,
     tableId: string,
     customerName?: string,
-    phone?: string
+    phone?: string,
+    qrToken?: string
   ): Promise<TableSession> {
     const existing = this.sessions.find(
       (s) => s.tenant_id === tenantId && s.table_id === tableId && s.is_active
@@ -933,7 +934,7 @@ class LocalDatabaseAdapterImpl implements DatabaseAdapter {
     return this.users.find((u) => u.tenant_id === tenantId && u.email.toLowerCase() === email.toLowerCase()) || null;
   }
 
-  async getUserByPin(tenantId: string, pin: string): Promise<User | null> {
+  async getUserByPin(tenantId: string, pin: string, clientIp?: string): Promise<User | null> {
     return this.users.find((u) => u.tenant_id === tenantId && u.pin_code === pin && u.is_active) || null;
   }
 

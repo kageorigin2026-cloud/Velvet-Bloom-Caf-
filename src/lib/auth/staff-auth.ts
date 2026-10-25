@@ -11,7 +11,7 @@ export const SESSION_COOKIE_NAME = "vb_staff_session";
 
 export async function authenticateStaff(
   tenantId: string,
-  credentials: { email?: string; pin?: string; password?: string }
+  credentials: { email?: string; pin?: string; password?: string; clientIp?: string }
 ): Promise<User | null> {
   const adapter = getDatabaseAdapter();
 
@@ -19,7 +19,7 @@ export async function authenticateStaff(
   if (credentials.pin) {
     // In Supabase mode, the PIN is validated strictly against the tenant's users in PostgreSQL
     // In local mode, the local adapter validates against seeded users
-    const user = await adapter.getUserByPin(tenantId, credentials.pin);
+    const user = await adapter.getUserByPin(tenantId, credentials.pin, credentials.clientIp);
     if (user && user.is_active && user.tenant_id === tenantId) {
       return user;
     }
