@@ -133,12 +133,12 @@ export default function StaffLoginPage() {
         <div className="text-center mb-6">
           <CafeLogo size="md" showTagline={true} showPoweredBy={true} />
           <h2 className="font-serif text-lg font-medium text-[#F6EFE7] mt-4">
-            {hasOwner === false ? "First-Time Owner Setup" : "Staff Access Terminal"}
+            {hasOwner === false ? "First-Time Owner Setup" : "Owner & Staff Terminal"}
           </h2>
           <p className="text-xs text-[#A8A29E] mt-0.5">
             {hasOwner === false
               ? "Initialize your Master Owner profile to unlock this café"
-              : "Enter your PIN code or sign in with your staff account"}
+              : "Enter your Owner or Staff PIN code to access the management portal"}
           </p>
         </div>
 
@@ -263,8 +263,14 @@ export default function StaffLoginPage() {
                       type="password"
                       maxLength={6}
                       value={pin}
-                      onChange={(e) => setPin(e.target.value)}
-                      placeholder="Enter Staff PIN"
+                      onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && pin.length >= 4) {
+                          handleLogin();
+                        }
+                      }}
+                      placeholder="Enter Owner or Staff PIN"
+                      autoFocus
                       className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-[#080808] border border-[#242424] text-center font-mono text-lg tracking-widest text-[#F6EFE7] focus:outline-none focus:border-[#C99A8A]"
                     />
                   </div>

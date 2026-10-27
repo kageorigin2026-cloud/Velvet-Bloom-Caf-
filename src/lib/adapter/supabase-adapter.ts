@@ -1154,7 +1154,7 @@ export class SupabaseDatabaseAdapter implements DatabaseAdapter {
 
   // Users / Staff
   async getUsers(tenantId: string): Promise<User[]> {
-    const client = this.getClient();
+    const client = getServiceRoleClient();
     const { data, error } = await client
       .from("users")
       .select("*")
@@ -1165,7 +1165,7 @@ export class SupabaseDatabaseAdapter implements DatabaseAdapter {
   }
 
   async getUserByEmail(tenantId: string, email: string): Promise<User | null> {
-    const client = this.getClient();
+    const client = getServiceRoleClient();
     const { data, error } = await client
       .from("users")
       .select("*")
@@ -1177,7 +1177,7 @@ export class SupabaseDatabaseAdapter implements DatabaseAdapter {
   }
 
   async getUserByPin(tenantId: string, pin: string, clientIp?: string): Promise<User | null> {
-    const client = this.getClient();
+    const client = getServiceRoleClient();
     const cleanPin = pin.trim();
 
     // Secure RPC authentication with IP rate limit tracking & bcrypt hashing
@@ -1196,7 +1196,7 @@ export class SupabaseDatabaseAdapter implements DatabaseAdapter {
   }
 
   async hasActiveOwner(tenantId: string): Promise<boolean> {
-    const client = this.getClient();
+    const client = getServiceRoleClient();
     try {
       const { data, error } = await client
         .from("users")
