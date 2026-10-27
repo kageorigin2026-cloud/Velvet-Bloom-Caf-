@@ -2,6 +2,7 @@ import {
   Tenant,
   CafeSettings,
   User,
+  UserRole,
   CafeTable,
   TableSession,
   Category,
@@ -332,9 +333,10 @@ class LocalDatabaseAdapterImpl implements DatabaseAdapter {
       .sort((a, b) => a.display_order - b.display_order);
   }
 
-  async getMenuItems(tenantId: string, categoryId?: string): Promise<MenuItem[]> {
+  async getMenuItems(tenantId: string, categoryId?: string, includeArchived = false): Promise<MenuItem[]> {
     return this.menuItems.filter((i) => {
       if (i.tenant_id !== tenantId) return false;
+      if (!includeArchived && i.is_archived) return false;
       if (categoryId && i.category_id !== categoryId) return false;
       return true;
     });
@@ -351,6 +353,79 @@ class LocalDatabaseAdapterImpl implements DatabaseAdapter {
     item.updated_at = new Date().toISOString();
     this.emit("menu_item.updated", item, tenantId);
     return { ...item };
+  }
+
+  async createMenuItem(
+    tenantId: string,
+    data: {
+      categoryId: string;
+      name: string;
+      description?: string;
+      price: number;
+      imageUrl?: string;
+      isVeg: boolean;
+      prepTimeMinutes?: number;
+    }
+  ): Promise<MenuItem> {
+    const newItem: MenuItem = {
+      id: `m-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      tenant_id: tenantId,
+      category_id: data.categoryId,
+      name: data.name.trim(),
+      description: data.description?.trim(),
+      price: data.price,
+      image_url: data.imageUrl?.trim(),
+      is_veg: data.isVeg,
+      is_available: true,
+      is_bestseller: false,
+      is_chef_special: false,
+      is_archived: false,
+      preparation_time_minutes: data.prepTimeMinutes || 15,
+      average_rating: 5.0,
+      total_reviews: 0,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    this.menuItems.push(newItem);
+    this.emit("menu_item.created", newItem, tenantId);
+    return { ...newItem };
+  }
+
+  async updateMenuItem(
+    tenantId: string,
+    itemId: string,
+    data: Partial<{
+      categoryId: string;
+      name: string;
+      description?: string;
+      price: number;
+      imageUrl?: string;
+      isVeg: boolean;
+      isAvailable: boolean;
+      isArchived: boolean;
+      prepTimeMinutes?: number;
+    }>
+  ): Promise<MenuItem> {
+    const item = this.menuItems.find((i) => i.tenant_id === tenantId && i.id === itemId);
+    if (!item) throw new Error("Menu item not found");
+
+    if (data.categoryId !== undefined) item.category_id = data.categoryId;
+    if (data.name !== undefined) item.name = data.name.trim();
+    if (data.description !== undefined) item.description = data.description.trim();
+    if (data.price !== undefined) item.price = data.price;
+    if (data.imageUrl !== undefined) item.image_url = data.imageUrl.trim();
+    if (data.isVeg !== undefined) item.is_veg = data.isVeg;
+    if (data.isAvailable !== undefined) item.is_available = data.isAvailable;
+    if (data.isArchived !== undefined) item.is_archived = data.isArchived;
+    if (data.prepTimeMinutes !== undefined) item.preparation_time_minutes = data.prepTimeMinutes;
+    item.updated_at = new Date().toISOString();
+
+    this.emit("menu_item.updated", item, tenantId);
+    return { ...item };
+  }
+
+  async archiveMenuItem(tenantId: string, itemId: string): Promise<MenuItem> {
+    return this.updateMenuItem(tenantId, itemId, { isArchived: true, isAvailable: false });
   }
 
   // Orders
@@ -927,7 +1002,90 @@ class LocalDatabaseAdapterImpl implements DatabaseAdapter {
 
   // Users / Staff
   async getUsers(tenantId: string): Promise<User[]> {
-    return this.users.filter((u) => u.tenant_id === tenantId && u.is_active);
+    return this.users
+      .filter((u) => u.tenant_id === tenantId)
+      .map((u) => ({
+        id: u.id,
+        tenant_id: u.tenant_id,
+        auth_user_id: u.auth_user_id,
+        full_name: u.full_name,
+        email: u.email,
+        role: u.role,
+        phone: u.phone,
+        is_active: u.is_active,
+        created_at: u.created_at,
+        updated_at: u.updated_at,
+      }));
+  }
+
+  async createStaffMember(
+    tenantId: string,
+    data: { fullName: string; email: string; role: UserRole; pin: string; phone?: string }
+  ): Promise<User> {
+    const cleanEmail = data.email.trim().toLowerCase();
+    const existing = this.users.find((u) => u.tenant_id === tenantId && u.email.toLowerCase() === cleanEmail);
+    if (existing) {
+      throw new Error(`Email ${cleanEmail} is already in use within this tenant`);
+    }
+
+    if (data.role === "OWNER" || data.role === "ADMIN") {
+      throw new Error("Cannot create OWNER or ADMIN accounts via standard staff management");
+    }
+
+    const newUser: User = {
+      id: `u-staff-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      tenant_id: tenantId,
+      full_name: data.fullName.trim(),
+      email: cleanEmail,
+      role: data.role,
+      phone: data.phone?.trim() || undefined,
+      pin_code: data.pin.trim(),
+      is_active: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    this.users.push(newUser);
+    return { ...newUser, pin_code: undefined };
+  }
+
+  async updateStaffMember(
+    tenantId: string,
+    userId: string,
+    data: { fullName?: string; email?: string; role?: UserRole; phone?: string; isActive?: boolean }
+  ): Promise<User> {
+    const user = this.users.find((u) => u.tenant_id === tenantId && u.id === userId);
+    if (!user) throw new Error("Staff member not found");
+
+    if (user.role === "OWNER") {
+      if (data.isActive === false) throw new Error("Cannot deactivate the primary Owner account");
+      if (data.role && data.role !== "OWNER") throw new Error("Cannot change role of primary Owner account");
+    }
+
+    if (data.fullName !== undefined) user.full_name = data.fullName.trim();
+    if (data.email !== undefined) {
+      const cleanEmail = data.email.trim().toLowerCase();
+      const conflict = this.users.find((u) => u.tenant_id === tenantId && u.email.toLowerCase() === cleanEmail && u.id !== userId);
+      if (conflict) throw new Error(`Email ${cleanEmail} is already in use`);
+      user.email = cleanEmail;
+    }
+    if (data.role !== undefined && user.role !== "OWNER") user.role = data.role;
+    if (data.phone !== undefined) user.phone = data.phone.trim() || undefined;
+    if (data.isActive !== undefined && user.role !== "OWNER") user.is_active = data.isActive;
+    user.updated_at = new Date().toISOString();
+
+    return { ...user, pin_code: undefined };
+  }
+
+  async updateStaffPin(tenantId: string, userId: string, newPin: string): Promise<boolean> {
+    const user = this.users.find((u) => u.tenant_id === tenantId && u.id === userId);
+    if (!user) throw new Error("Staff user not found in this tenant");
+    user.pin_code = newPin.trim();
+    user.updated_at = new Date().toISOString();
+    return true;
+  }
+
+  async deleteStaffMember(tenantId: string, userId: string): Promise<User> {
+    return this.updateStaffMember(tenantId, userId, { isActive: false });
   }
 
   async getUserByEmail(tenantId: string, email: string): Promise<User | null> {

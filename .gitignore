@@ -41,4 +41,5 @@ Thumbs.db
 
 # Backup scratch data
 scripts/*.json
+*.tsbuildinfo
 

@@ -148,6 +148,7 @@ export interface MenuItem {
   is_available: boolean;
   is_bestseller: boolean;
   is_chef_special: boolean;
+  is_archived?: boolean;
   preparation_time_minutes: number;
   calories?: number;
   average_rating: number;

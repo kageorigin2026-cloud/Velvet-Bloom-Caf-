@@ -34,21 +34,25 @@ export function StaffHeader({ currentRole = "STAFF", staffName = "Staff Member" 
     { href: "/admin/qr-codes", label: "QR Standees", icon: QrCode, roles: ["OWNER", "ADMIN"] },
   ];
 
+  const visibleLinks = navLinks.filter(
+    (link) => link.roles.includes(currentRole) || currentRole === "OWNER" || currentRole === "ADMIN"
+  );
+
   return (
-    <header className="sticky top-0 z-40 w-full border-b border-[#242424] bg-[#080808]/90 backdrop-blur-md px-4 py-2.5">
-      <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
-        <div className="flex items-center gap-6">
+    <header className="sticky top-0 z-40 w-full border-b border-[#242424] bg-[#080808]/90 backdrop-blur-md px-3 sm:px-4 py-2.5">
+      <div className="max-w-7xl mx-auto flex items-center justify-between gap-2 sm:gap-4">
+        <div className="flex items-center gap-3 sm:gap-6 overflow-hidden">
           <CafeLogo size="sm" showTagline={false} showPoweredBy={false} href="/" />
 
-          <nav className="hidden md:flex items-center gap-1.5" aria-label="Staff roles navigation">
-            {navLinks.map((link) => {
+          <nav className="flex items-center gap-1 sm:gap-1.5 overflow-x-auto scrollbar-none py-0.5" aria-label="Staff roles navigation">
+            {visibleLinks.map((link) => {
               const isActive = pathname.startsWith(link.href);
               const Icon = link.icon;
               return (
                 <Link
                   key={link.href}
                   href={link.href}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                  className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${
                     isActive
                       ? "bg-[#C99A8A]/15 text-[#D8B58A] border border-[#C99A8A]/30 shadow-sm"
                       : "text-[#A8A29E] hover:text-[#F6EFE7] hover:bg-[#171717]"

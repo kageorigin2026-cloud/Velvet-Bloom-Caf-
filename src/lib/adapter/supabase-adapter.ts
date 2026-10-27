@@ -3,6 +3,7 @@ import {
   Tenant,
   CafeSettings,
   User,
+  UserRole,
   CafeTable,
   TableSession,
   Category,
@@ -339,7 +340,7 @@ export class SupabaseDatabaseAdapter implements DatabaseAdapter {
     return data || [];
   }
 
-  async getMenuItems(tenantId: string, categoryId?: string): Promise<MenuItem[]> {
+  async getMenuItems(tenantId: string, categoryId?: string, includeArchived = false): Promise<MenuItem[]> {
     const client = this.getClient();
     let query = client
       .from("menu_items")
@@ -352,6 +353,9 @@ export class SupabaseDatabaseAdapter implements DatabaseAdapter {
       `)
       .eq("tenant_id", tenantId);
 
+    if (!includeArchived) {
+      query = query.neq("is_archived", true);
+    }
     if (categoryId) query = query.eq("category_id", categoryId);
 
     const { data, error } = await query;
@@ -378,7 +382,7 @@ export class SupabaseDatabaseAdapter implements DatabaseAdapter {
   }
 
   async updateMenuItemAvailability(tenantId: string, itemId: string, isAvailable: boolean): Promise<MenuItem> {
-    const client = this.getClient();
+    const client = getServiceRoleClient();
     const { data, error } = await client
       .from("menu_items")
       .update({ is_available: isAvailable, updated_at: new Date().toISOString() })
@@ -388,6 +392,100 @@ export class SupabaseDatabaseAdapter implements DatabaseAdapter {
       .single();
     if (error) throw new Error(`Failed to update item availability: ${error.message}`);
     return data;
+  }
+
+  async createMenuItem(
+    tenantId: string,
+    data: {
+      categoryId: string;
+      name: string;
+      description?: string;
+      price: number;
+      imageUrl?: string;
+      isVeg: boolean;
+      prepTimeMinutes?: number;
+    }
+  ): Promise<MenuItem> {
+    const client = getServiceRoleClient();
+    const { data: item, error } = await client
+      .from("menu_items")
+      .insert({
+        tenant_id: tenantId,
+        category_id: data.categoryId,
+        name: data.name.trim(),
+        description: data.description?.trim() || null,
+        price: data.price,
+        image_url: data.imageUrl?.trim() || null,
+        is_veg: data.isVeg,
+        is_available: true,
+        is_archived: false,
+        preparation_time_minutes: data.prepTimeMinutes || 15,
+      })
+      .select()
+      .single();
+
+    if (error) throw new Error(`Failed to create menu item: ${error.message}`);
+    return item;
+  }
+
+  async updateMenuItem(
+    tenantId: string,
+    itemId: string,
+    data: Partial<{
+      categoryId: string;
+      name: string;
+      description?: string;
+      price: number;
+      imageUrl?: string;
+      isVeg: boolean;
+      isAvailable: boolean;
+      isArchived: boolean;
+      prepTimeMinutes?: number;
+    }>
+  ): Promise<MenuItem> {
+    const client = getServiceRoleClient();
+    const updatePayload: Record<string, any> = {
+      updated_at: new Date().toISOString(),
+    };
+
+    if (data.categoryId !== undefined) updatePayload.category_id = data.categoryId;
+    if (data.name !== undefined) updatePayload.name = data.name.trim();
+    if (data.description !== undefined) updatePayload.description = data.description.trim() || null;
+    if (data.price !== undefined) updatePayload.price = data.price;
+    if (data.imageUrl !== undefined) updatePayload.image_url = data.imageUrl.trim() || null;
+    if (data.isVeg !== undefined) updatePayload.is_veg = data.isVeg;
+    if (data.isAvailable !== undefined) updatePayload.is_available = data.isAvailable;
+    if (data.isArchived !== undefined) updatePayload.is_archived = data.isArchived;
+    if (data.prepTimeMinutes !== undefined) updatePayload.preparation_time_minutes = data.prepTimeMinutes;
+
+    const { data: item, error } = await client
+      .from("menu_items")
+      .update(updatePayload)
+      .eq("tenant_id", tenantId)
+      .eq("id", itemId)
+      .select()
+      .single();
+
+    if (error) throw new Error(`Failed to update menu item: ${error.message}`);
+    return item;
+  }
+
+  async archiveMenuItem(tenantId: string, itemId: string): Promise<MenuItem> {
+    const client = getServiceRoleClient();
+    const { data: item, error } = await client
+      .from("menu_items")
+      .update({
+        is_archived: true,
+        is_available: false,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("tenant_id", tenantId)
+      .eq("id", itemId)
+      .select()
+      .single();
+
+    if (error) throw new Error(`Failed to archive menu item: ${error.message}`);
+    return item;
   }
 
   // Orders
@@ -1157,11 +1255,65 @@ export class SupabaseDatabaseAdapter implements DatabaseAdapter {
     const client = getServiceRoleClient();
     const { data, error } = await client
       .from("users")
-      .select("*")
+      .select("id, tenant_id, auth_user_id, full_name, email, role, phone, is_active, created_at, updated_at")
       .eq("tenant_id", tenantId)
-      .eq("is_active", true);
+      .order("created_at", { ascending: true });
     if (error) throw new Error(`Failed to fetch users: ${error.message}`);
     return data || [];
+  }
+
+  async createStaffMember(
+    tenantId: string,
+    data: { fullName: string; email: string; role: UserRole; pin: string; phone?: string }
+  ): Promise<User> {
+    const client = getServiceRoleClient();
+    const { data: user, error } = await client.rpc("admin_create_staff", {
+      p_tenant_id: tenantId,
+      p_full_name: data.fullName.trim(),
+      p_email: data.email.trim().toLowerCase(),
+      p_role: data.role,
+      p_pin: data.pin.trim(),
+      p_phone: data.phone?.trim() || null,
+    });
+
+    if (error) throw new Error(`Failed to create staff member: ${error.message}`);
+    return user as User;
+  }
+
+  async updateStaffMember(
+    tenantId: string,
+    userId: string,
+    data: { fullName?: string; email?: string; role?: UserRole; phone?: string; isActive?: boolean }
+  ): Promise<User> {
+    const client = getServiceRoleClient();
+    const { data: user, error } = await client.rpc("admin_update_staff", {
+      p_tenant_id: tenantId,
+      p_user_id: userId,
+      p_full_name: data.fullName?.trim() || null,
+      p_email: data.email?.trim().toLowerCase() || null,
+      p_role: data.role || null,
+      p_phone: data.phone?.trim() || null,
+      p_is_active: data.isActive !== undefined ? data.isActive : null,
+    });
+
+    if (error) throw new Error(`Failed to update staff member: ${error.message}`);
+    return user as User;
+  }
+
+  async updateStaffPin(tenantId: string, userId: string, newPin: string): Promise<boolean> {
+    const client = getServiceRoleClient();
+    const { data: success, error } = await client.rpc("admin_update_staff_pin", {
+      p_tenant_id: tenantId,
+      p_user_id: userId,
+      p_new_pin: newPin.trim(),
+    });
+
+    if (error) throw new Error(`Failed to update staff PIN: ${error.message}`);
+    return Boolean(success);
+  }
+
+  async deleteStaffMember(tenantId: string, userId: string): Promise<User> {
+    return this.updateStaffMember(tenantId, userId, { isActive: false });
   }
 
   async getUserByEmail(tenantId: string, email: string): Promise<User | null> {

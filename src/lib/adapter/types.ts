@@ -2,6 +2,7 @@ import {
   Tenant,
   CafeSettings,
   User,
+  UserRole,
   CafeTable,
   TableSession,
   Category,
@@ -47,9 +48,12 @@ export interface DatabaseAdapter {
   
   // Menu & Categories
   getCategories(tenantId: string): Promise<Category[]>;
-  getMenuItems(tenantId: string, categoryId?: string): Promise<MenuItem[]>;
+  getMenuItems(tenantId: string, categoryId?: string, includeArchived?: boolean): Promise<MenuItem[]>;
   getMenuItemById(tenantId: string, itemId: string): Promise<MenuItem | null>;
   updateMenuItemAvailability(tenantId: string, itemId: string, isAvailable: boolean): Promise<MenuItem>;
+  createMenuItem(tenantId: string, data: { categoryId: string; name: string; description?: string; price: number; imageUrl?: string; isVeg: boolean; prepTimeMinutes?: number }): Promise<MenuItem>;
+  updateMenuItem(tenantId: string, itemId: string, data: Partial<{ categoryId: string; name: string; description?: string; price: number; imageUrl?: string; isVeg: boolean; isAvailable: boolean; isArchived: boolean; prepTimeMinutes?: number }>): Promise<MenuItem>;
+  archiveMenuItem(tenantId: string, itemId: string): Promise<MenuItem>;
   
   // Orders
   createOrder(tenantId: string, data: z.infer<typeof CreateOrderSchema>): Promise<Order>;
@@ -90,6 +94,10 @@ export interface DatabaseAdapter {
   getUserByPin(tenantId: string, pin: string, clientIp?: string): Promise<User | null>;
   hasActiveOwner(tenantId: string): Promise<boolean>;
   provisionInitialOwner(tenantId: string, fullName: string, email: string, pin: string, authUserId?: string | null): Promise<User>;
+  createStaffMember(tenantId: string, data: { fullName: string; email: string; role: UserRole; pin: string; phone?: string }): Promise<User>;
+  updateStaffMember(tenantId: string, userId: string, data: { fullName?: string; email?: string; role?: UserRole; phone?: string; isActive?: boolean }): Promise<User>;
+  updateStaffPin(tenantId: string, userId: string, newPin: string): Promise<boolean>;
+  deleteStaffMember(tenantId: string, userId: string): Promise<User>;
   
   // Operational Analytics
   getLiveKPIs(tenantId: string): Promise<LiveDashboardKPIs>;

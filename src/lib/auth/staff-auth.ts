@@ -79,6 +79,7 @@ export function createSessionToken(user: User): StaffSession {
     tenantId: user.tenant_id,
     role: user.role,
     email: user.email,
+    name: user.full_name,
     exp: Date.now() + 24 * 60 * 60 * 1000,
   };
   const token = Buffer.from(JSON.stringify(tokenPayload)).toString("base64");
@@ -90,7 +91,7 @@ export function createSessionToken(user: User): StaffSession {
   };
 }
 
-export function parseSessionToken(token: string): { userId: string; tenantId: string; role: UserRole } | null {
+export function parseSessionToken(token: string): { userId: string; tenantId: string; role: UserRole; email?: string; name?: string } | null {
   try {
     const decoded = Buffer.from(token, "base64").toString("utf-8");
     const parsed = JSON.parse(decoded);
@@ -99,6 +100,8 @@ export function parseSessionToken(token: string): { userId: string; tenantId: st
       userId: parsed.userId,
       tenantId: parsed.tenantId,
       role: parsed.role,
+      email: parsed.email,
+      name: parsed.name,
     };
   } catch {
     return null;
