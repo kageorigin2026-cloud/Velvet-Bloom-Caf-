@@ -109,13 +109,16 @@ export function parseSessionToken(token: string): { userId: string; tenantId: st
 }
 
 export function extractStaffToken(req: { cookies: { get: (name: string) => { value: string } | undefined }; headers: { get: (name: string) => string | null } }): string | null {
-  const cookieToken = req.cookies.get(SESSION_COOKIE_NAME)?.value;
-  if (cookieToken) return cookieToken;
-
+  // 1. Prefer explicit Authorization header if provided by client API request
   const authHeader = req.headers.get("authorization");
   if (authHeader && authHeader.startsWith("Bearer ")) {
-    return authHeader.slice(7).trim();
+    const headerToken = authHeader.slice(7).trim();
+    if (headerToken) return headerToken;
   }
+
+  // 2. Fall back to ambient session cookie
+  const cookieToken = req.cookies.get(SESSION_COOKIE_NAME)?.value;
+  if (cookieToken) return cookieToken;
 
   return null;
 }
@@ -128,7 +131,7 @@ export function verifyStaffRole(
   token: string | null | undefined,
   allowedRoles: UserRole[],
   targetTenantId?: string
-): { authorized: boolean; error?: string; session?: { userId: string; tenantId: string; role: UserRole } } {
+): { authorized: boolean; error?: string; session?: { userId: string; tenantId: string; role: UserRole; name?: string; email?: string } } {
   if (!token) {
     return { authorized: false, error: "Authentication required" };
   }
@@ -138,17 +141,27 @@ export function verifyStaffRole(
     return { authorized: false, error: "Invalid or expired session token" };
   }
 
-  if (targetTenantId && session.tenantId !== targetTenantId) {
+  // Case-insensitive tenant isolation check
+  if (targetTenantId && session.tenantId?.toLowerCase() !== targetTenantId.toLowerCase()) {
     return { authorized: false, error: "Cross-tenant access forbidden" };
   }
 
-  if (session.role === "OWNER" || session.role === "ADMIN") {
-    return { authorized: true, session };
+  // Case-insensitive role comparison
+  const role = (session.role?.toString().trim().toUpperCase() || "STAFF") as UserRole;
+  const normalizedSession = { ...session, role };
+
+  // Owners and Admins hold master privileges across all terminals
+  if (role === "OWNER" || role === "ADMIN") {
+    return { authorized: true, session: normalizedSession };
   }
 
-  if (!allowedRoles.includes(session.role)) {
-    return { authorized: false, error: "Insufficient permissions for this operation" };
+  const normalizedAllowed = allowedRoles.map((r) => r.toUpperCase());
+  if (!normalizedAllowed.includes(role)) {
+    return {
+      authorized: false,
+      error: `Insufficient permissions: active session role '${role}' is not authorized for this operation (requires ${allowedRoles.join(" or ")})`,
+    };
   }
 
-  return { authorized: true, session };
+  return { authorized: true, session: normalizedSession };
 }

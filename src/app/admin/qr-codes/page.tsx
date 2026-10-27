@@ -1,10 +1,13 @@
 import React from "react";
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { getDatabaseAdapter, getDefaultTenantId } from "@/lib/adapter";
 import { StaffHeader } from "@/components/layout/StaffHeader";
 import { NotificationProvider } from "@/lib/audio/notification-context";
 import { NotificationBanner } from "@/components/ui/NotificationBanner";
 import { QrStandeeBatchView } from "./QrStandeeBatchView";
 import { resolveServerBaseUrl } from "@/lib/server/url-resolver";
+import { parseSessionToken, SESSION_COOKIE_NAME } from "@/lib/auth/staff-auth";
 
 export const metadata = {
   title: "QR Standee Batch Generator | Velvet Bloom Café Admin",
@@ -12,6 +15,15 @@ export const metadata = {
 };
 
 export default async function AdminQrCodesPage() {
+  const cookieStore = await cookies();
+  const sessionCookie = cookieStore.get(SESSION_COOKIE_NAME);
+  const session = sessionCookie ? parseSessionToken(sessionCookie.value) : null;
+  const role = session?.role?.toString().trim().toUpperCase();
+
+  if (!session || (role !== "OWNER" && role !== "ADMIN")) {
+    redirect("/staff/login");
+  }
+
   const adapter = getDatabaseAdapter();
   const tenantId = getDefaultTenantId();
 
@@ -33,7 +45,10 @@ export default async function AdminQrCodesPage() {
     <NotificationProvider role="ADMIN">
       <div className="min-h-screen bg-[#080808] text-[#F6EFE7] flex flex-col">
         <div className="no-print">
-          <StaffHeader currentRole="OWNER" staffName="Alexander Vance" />
+          <StaffHeader
+            currentRole={role}
+            staffName={session.name || (role === "OWNER" ? "Alexander Vance (Owner)" : "Administrator")}
+          />
           <NotificationBanner />
         </div>
         <QrStandeeBatchView

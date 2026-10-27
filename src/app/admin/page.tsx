@@ -1,5 +1,6 @@
 import React from "react";
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { getDatabaseAdapter, getDefaultTenantId } from "@/lib/adapter";
 import { StaffHeader } from "@/components/layout/StaffHeader";
 import { AdminDashboardView } from "./AdminDashboardView";
@@ -11,6 +12,11 @@ export default async function AdminPage() {
   const cookieStore = await cookies();
   const sessionCookie = cookieStore.get(SESSION_COOKIE_NAME);
   const session = sessionCookie ? parseSessionToken(sessionCookie.value) : null;
+  const role = session?.role?.toString().trim().toUpperCase();
+
+  if (!session || (role !== "OWNER" && role !== "ADMIN")) {
+    redirect("/staff/login");
+  }
 
   const adapter = getDatabaseAdapter();
   const tenantId = getDefaultTenantId();
@@ -42,6 +48,11 @@ export default async function AdminPage() {
           tables={tables}
           users={users}
           settings={settings}
+          currentSession={{
+            name: session?.name || "Alexander Vance (Owner)",
+            role: session?.role || "OWNER",
+            email: session?.email || "",
+          }}
         />
       </div>
     </NotificationProvider>

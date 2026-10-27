@@ -4,8 +4,11 @@ import {
   createSessionToken,
   parseSessionToken,
   verifyStaffRole,
+  extractStaffToken,
+  STAFF_COOKIE_NAME,
 } from "@/lib/auth/staff-auth";
-import { User, MenuItem } from "@/types/database.types";
+import { User, MenuItem, UserRole } from "@/types/database.types";
+import { NextRequest } from "next/server";
 
 describe("Staff Management & Menu Management Invariant Tests", () => {
   let adapter: LocalDatabaseAdapter;
@@ -25,24 +28,31 @@ describe("Staff Management & Menu Management Invariant Tests", () => {
       }
     });
 
-    it("allows creating a new staff member with valid details and numeric PIN", async () => {
-      const newStaff = await adapter.createStaffMember(tenantId, {
-        fullName: "Rohan Patel",
-        email: "rohan@velvetbloom.com",
-        role: "WAITER",
-        pin: "7890",
-        phone: "+91 98765 11111",
-      });
+    it("allows creating all 5 operational staff roles with valid numeric PINs", async () => {
+      const roles: UserRole[] = ["MANAGER", "CHEF", "WAITER", "CASHIER", "STAFF"];
 
-      expect(newStaff.id).toBeDefined();
-      expect(newStaff.full_name).toBe("Rohan Patel");
-      expect(newStaff.role).toBe("WAITER");
-      expect(newStaff.is_active).toBe(true);
+      for (let i = 0; i < roles.length; i++) {
+        const role = roles[i];
+        const pin = `789${i}`;
+        const newStaff = await adapter.createStaffMember(tenantId, {
+          fullName: `Staff Member ${role}`,
+          email: `staff.${role.toLowerCase()}@velvetbloom.com`,
+          role,
+          pin,
+          phone: `+91 98765 0000${i}`,
+        });
 
-      // Verify the new staff member can authenticate with their PIN
-      const authUser = await adapter.getUserByPin(tenantId, "7890");
-      expect(authUser).not.toBeNull();
-      expect(authUser?.email).toBe("rohan@velvetbloom.com");
+        expect(newStaff.id).toBeDefined();
+        expect(newStaff.full_name).toBe(`Staff Member ${role}`);
+        expect(newStaff.role).toBe(role);
+        expect(newStaff.is_active).toBe(true);
+
+        // Verify the staff member can authenticate with their PIN
+        const authUser = await adapter.getUserByPin(tenantId, pin);
+        expect(authUser).not.toBeNull();
+        expect(authUser?.email).toBe(`staff.${role.toLowerCase()}@velvetbloom.com`);
+        expect(authUser?.role).toBe(role);
+      }
     });
 
     it("strictly prohibits creating accounts with OWNER or ADMIN role via staff management", async () => {
@@ -290,6 +300,90 @@ describe("Staff Management & Menu Management Invariant Tests", () => {
       // Denied for kitchen
       const kitchenAuth = verifyStaffRole(session.token, ["CHEF"], tenantId);
       expect(kitchenAuth.authorized).toBe(false);
+    });
+
+    it("extractStaffToken gives precedence to Authorization Bearer header over session cookie", () => {
+      const ownerUser: User = {
+        id: "owner-1",
+        tenant_id: tenantId,
+        full_name: "Alexander Vance",
+        email: "owner@velvetbloom.com",
+        role: "OWNER",
+        is_active: true,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      const chefUser: User = {
+        id: "chef-1",
+        tenant_id: tenantId,
+        full_name: "Marcus Chen",
+        email: "chef@velvetbloom.com",
+        role: "CHEF",
+        is_active: true,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      const ownerSession = createSessionToken(ownerUser);
+      const chefSession = createSessionToken(chefUser);
+
+      // Create NextRequest with Chef in cookie and Owner in Authorization header
+      const req = new NextRequest("http://localhost:3000/api/staff", {
+        headers: {
+          authorization: `Bearer ${ownerSession.token}`,
+          cookie: `${STAFF_COOKIE_NAME}=${chefSession.token}`,
+        },
+      });
+
+      const extracted = extractStaffToken(req);
+      expect(extracted).toBe(ownerSession.token);
+
+      // Verify the extracted token grants OWNER authorization
+      const auth = verifyStaffRole(extracted, ["OWNER", "ADMIN"], tenantId);
+      expect(auth.authorized).toBe(true);
+      expect(auth.session?.role).toBe("OWNER");
+    });
+
+    it("verifyStaffRole supports case-insensitive roles and tenant comparisons", () => {
+      const ownerUser: User = {
+        id: "owner-1",
+        tenant_id: "00000000-0000-0000-0000-000000000001",
+        full_name: "Alexander Vance",
+        email: "owner@velvetbloom.com",
+        role: "OWNER",
+        is_active: true,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      const session = createSessionToken(ownerUser);
+
+      // Case-insensitive role and tenant ID check
+      const auth = verifyStaffRole(
+        session.token,
+        ["owner" as any, "admin" as any],
+        "00000000-0000-0000-0000-000000000001".toUpperCase()
+      );
+      expect(auth.authorized).toBe(true);
+      expect(auth.session?.role).toBe("OWNER");
+    });
+
+    it("provides informative error message identifying active role when rejected", () => {
+      const chefUser: User = {
+        id: "chef-1",
+        tenant_id: tenantId,
+        full_name: "Nag Chef",
+        email: "nag@velvetbloom.com",
+        role: "CHEF",
+        is_active: true,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      const session = createSessionToken(chefUser);
+
+      const auth = verifyStaffRole(session.token, ["OWNER", "ADMIN"], tenantId);
+      expect(auth.authorized).toBe(false);
+      expect(auth.error).toContain("CHEF");
+      expect(auth.error).toContain("OWNER");
     });
   });
 });

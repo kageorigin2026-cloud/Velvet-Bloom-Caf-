@@ -15,8 +15,9 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
   const cookieStore = await cookies();
   const sessionCookie = cookieStore.get(SESSION_COOKIE_NAME);
   const session = sessionCookie ? parseSessionToken(sessionCookie.value) : null;
+  const role = session?.role?.toString().trim().toUpperCase();
 
-  if (!session || (session.role !== "OWNER" && session.role !== "ADMIN")) {
+  if (!session || (role !== "OWNER" && role !== "ADMIN")) {
     redirect("/staff/login");
   }
 

@@ -72,6 +72,11 @@ interface AdminDashboardViewProps {
   tables: CafeTable[];
   users: User[];
   settings: CafeSettings;
+  currentSession?: {
+    name?: string;
+    role?: string;
+    email?: string;
+  };
 }
 
 export function AdminDashboardView({
@@ -82,6 +87,7 @@ export function AdminDashboardView({
   tables: initialTables,
   users,
   settings: initialSettings,
+  currentSession,
 }: AdminDashboardViewProps) {
   const [activeTab, setActiveTab] = useState<
     "analytics" | "menu" | "tables" | "staff" | "sounds" | "settings"
@@ -116,6 +122,36 @@ export function AdminDashboardView({
   const [resetPinStaff, setResetPinStaff] = useState<User | null>(null);
   const [staffLoading, setStaffLoading] = useState(false);
   const [staffFeedback, setStaffFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [sessionWarning, setSessionWarning] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    try {
+      const stored = localStorage.getItem("vb_staff_user");
+      if (stored) {
+        const u = JSON.parse(stored);
+        const role = (u.role || "").toUpperCase();
+        if (role && role !== "OWNER" && role !== "ADMIN") {
+          setSessionWarning(
+            `Session Notice: Browser storage is currently signed in as ${u.full_name || u.name || "Staff"} (${role}). Administrative changes require Owner privileges.`
+          );
+        }
+      }
+    } catch {}
+  }, []);
+
+  const getAuthHeaders = (withJson: boolean = true) => {
+    const headers: Record<string, string> = {};
+    if (withJson) {
+      headers["Content-Type"] = "application/json";
+    }
+    if (typeof window !== "undefined") {
+      const token = localStorage.getItem("vb_staff_token");
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+      }
+    }
+    return headers;
+  };
 
   // New Staff Form State
   const [newStaffForm, setNewStaffForm] = useState({
@@ -181,15 +217,24 @@ export function AdminDashboardView({
     try {
       const res = await fetch("/api/staff", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(true),
+        credentials: "include",
         body: JSON.stringify(newStaffForm),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to create staff account");
+      if (!res.ok) {
+        if (res.status === 403 || res.status === 401) {
+          setSessionWarning(
+            data.error || "Permission Denied: Your terminal session does not have Owner privileges. Please sign in with Owner credentials."
+          );
+        }
+        throw new Error(data.error || "Failed to create staff account");
+      }
 
       setStaffList((prev) => [...prev, data]);
       setNewStaffForm({ fullName: "", email: "", role: "WAITER", pin: "", phone: "" });
       setIsAddStaffOpen(false);
+      setSessionWarning(null);
       showStaffFeedback("success", `Staff account created for ${data.full_name}`);
     } catch (err: any) {
       showStaffFeedback("error", err.message || "Failed to create staff account");
@@ -206,7 +251,8 @@ export function AdminDashboardView({
     try {
       const res = await fetch(`/api/staff/${editingStaff.id}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(true),
+        credentials: "include",
         body: JSON.stringify({
           fullName: editingStaff.full_name,
           email: editingStaff.email,
@@ -215,10 +261,18 @@ export function AdminDashboardView({
         }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to update staff account");
+      if (!res.ok) {
+        if (res.status === 403 || res.status === 401) {
+          setSessionWarning(
+            data.error || "Permission Denied: Only Owner or Admin can update staff accounts."
+          );
+        }
+        throw new Error(data.error || "Failed to update staff account");
+      }
 
       setStaffList((prev) => prev.map((u) => (u.id === data.id ? { ...u, ...data } : u)));
       setEditingStaff(null);
+      setSessionWarning(null);
       showStaffFeedback("success", `Updated details for ${data.full_name}`);
     } catch (err: any) {
       showStaffFeedback("error", err.message || "Failed to update staff account");
@@ -244,15 +298,24 @@ export function AdminDashboardView({
     try {
       const res = await fetch(`/api/staff/${resetPinStaff.id}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(true),
+        credentials: "include",
         body: JSON.stringify({ newPin: newPinValue.trim() }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to reset PIN");
+      if (!res.ok) {
+        if (res.status === 403 || res.status === 401) {
+          setSessionWarning(
+            data.error || "Permission Denied: Only Owner or Admin can reset staff PINs."
+          );
+        }
+        throw new Error(data.error || "Failed to reset PIN");
+      }
 
       setResetPinStaff(null);
       setNewPinValue("");
       setConfirmPinValue("");
+      setSessionWarning(null);
       showStaffFeedback("success", `PIN updated for ${resetPinStaff.full_name}`);
     } catch (err: any) {
       showStaffFeedback("error", err.message || "Failed to reset PIN");
@@ -274,14 +337,21 @@ export function AdminDashboardView({
     try {
       const res = await fetch(`/api/staff/${user.id}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(true),
+        credentials: "include",
         body: JSON.stringify({ isActive: nextStatus }),
       });
       if (!res.ok) {
         const data = await res.json();
         setStaffList((prev) => prev.map((u) => (u.id === user.id ? { ...u, is_active: !nextStatus } : u)));
+        if (res.status === 403 || res.status === 401) {
+          setSessionWarning(
+            data.error || "Permission Denied: Only Owner or Admin can update staff accounts."
+          );
+        }
         showStaffFeedback("error", data.error || "Failed to update account status");
       } else {
+        setSessionWarning(null);
         showStaffFeedback("success", `${user.full_name} is now ${nextStatus ? "Active" : "Deactivated"}`);
       }
     } catch {
@@ -298,7 +368,8 @@ export function AdminDashboardView({
     try {
       const res = await fetch(`/api/menu/${itemId}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(true),
+        credentials: "include",
         body: JSON.stringify({ isAvailable: !current }),
       });
       if (!res.ok) {
@@ -332,7 +403,8 @@ export function AdminDashboardView({
     try {
       const res = await fetch("/api/menu", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(true),
+        credentials: "include",
         body: JSON.stringify({
           ...newDishForm,
           price: numPrice,
@@ -373,7 +445,8 @@ export function AdminDashboardView({
     try {
       const res = await fetch(`/api/menu/${editingDish.id}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(true),
+        credentials: "include",
         body: JSON.stringify({
           name: editingDish.name,
           categoryId: editingDish.category_id,
@@ -404,6 +477,8 @@ export function AdminDashboardView({
     try {
       const res = await fetch(`/api/menu/${archivingDish.id}`, {
         method: "DELETE",
+        headers: getAuthHeaders(true),
+        credentials: "include",
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to archive dish");
@@ -429,6 +504,8 @@ export function AdminDashboardView({
       formData.append("file", file);
       const res = await fetch("/api/menu/upload", {
         method: "POST",
+        headers: getAuthHeaders(false),
+        credentials: "include",
         body: formData,
       });
       const data = await res.json();
@@ -449,7 +526,8 @@ export function AdminDashboardView({
     try {
       const res = await fetch("/api/settings", {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(true),
+        credentials: "include",
         body: JSON.stringify({
           cafeName: settings.cafe_name,
           tagline: settings.tagline,
@@ -1485,6 +1563,31 @@ export function AdminDashboardView({
       {/* TAB 4: STAFF ACCOUNTS & ROLE-BASED ACCESS */}
       {activeTab === "staff" && (
         <div className="space-y-4">
+          {sessionWarning && (
+            <div className="p-4 rounded-2xl bg-[#C96B6B]/15 border border-[#C96B6B]/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-2.5">
+                <AlertTriangle className="w-5 h-5 text-[#C96B6B] shrink-0" />
+                <div>
+                  <div className="font-semibold text-[#F6EFE7]">Privilege Mismatch Detected</div>
+                  <div className="text-xs text-[#E5A8A8] mt-0.5">{sessionWarning}</div>
+                </div>
+              </div>
+              <button
+                onClick={async () => {
+                  try {
+                    await fetch("/api/auth/staff-logout", { method: "POST" });
+                  } catch {}
+                  localStorage.removeItem("vb_staff_token");
+                  localStorage.removeItem("vb_staff_user");
+                  window.location.href = "/staff/login";
+                }}
+                className="px-3.5 py-1.5 rounded-xl bg-[#C96B6B] text-white font-semibold text-xs whitespace-nowrap hover:bg-[#B55B5B] transition-colors shrink-0 shadow-sm"
+              >
+                Sign In as Owner
+              </button>
+            </div>
+          )}
+
           {staffFeedback && (
             <div
               className={`p-3.5 rounded-xl border text-xs flex items-center justify-between ${
@@ -1513,9 +1616,17 @@ export function AdminDashboardView({
           {/* Top Bar: Title & Add Staff Button */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-2xl bg-[#171717] border border-[#242424]">
             <div>
-              <h2 className="font-serif text-lg font-medium text-[#F6EFE7]">
-                Staff Directory & Terminal Access
-              </h2>
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <h2 className="font-serif text-lg font-medium text-[#F6EFE7]">
+                  Staff Directory & Terminal Access
+                </h2>
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#D8B58A]/15 border border-[#D8B58A]/30 text-[11px] text-[#D8B58A]">
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                  <span>
+                    Authenticated: <strong>{currentSession?.name || "Alexander Vance (Owner)"}</strong> ({currentSession?.role || "OWNER"})
+                  </span>
+                </div>
+              </div>
               <p className="text-xs text-[#A8A29E] mt-0.5">
                 {staffList.length} total staff accounts configured for Velvet Bloom Café
               </p>
